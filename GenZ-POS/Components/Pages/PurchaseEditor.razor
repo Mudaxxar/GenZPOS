@@ -1,0 +1,478 @@
+@page "/purchases/new"
+@page "/purchases/{Id:int}/edit"
+@attribute [Authorize(Policy = Permissions.PurchasesManage)]
+@inherits PageBase
+@inject PurchaseService Purchases
+@inject ReportService Reports
+@inject StockItemService StockItems
+@inject ProductExcelService Excel
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">@(IsEdit ? $"Edit Purchase #{Id}" : "New Purchase (Stock In)")</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        @if (IsEdit && loaded && !notFound)
+        {
+            <RadzenButton Text="Export to Excel" Icon="table_view" ButtonStyle="ButtonStyle.Light" Click="ExportAsync"
+                          title="This bill as saved (Products layout + Qty); save your changes first" />
+        }
+        <RadzenButton Text="Back to purchases" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases"))" />
+    </RadzenStack>
+</RadzenStack>
+
+@if (!loaded)
+{
+    <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Style="height:4px" />
+}
+else if (IsEdit && notFound)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">Purchase #@Id was not found. It may have been deleted.</RadzenAlert>
+}
+else
+{
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeLG="9">
+        @* Enter flow: Date → Supplier → Bill # → Item (its panel opens: colours, sizes, cost, profit %, retail, qty grid → Add to purchase) *@
+        <div data-enter-group="true">
+        <RadzenCard class="rz-mb-3">
+            <RadzenRow Gap="1rem">
+                <RadzenColumn Size="12" SizeMD="3">
+                    <DateBox Label="Date" @bind-Value="purchaseDate" Style="width:100%" />
+                </RadzenColumn>
+                <RadzenColumn Size="12" SizeMD="6">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenFormField Text="Supplier *" Style="flex:1">
+                            <RadzenDropDown TValue="int" OpenOnFocus="true" @bind-Value="supplierId" @bind-Value:after="SupplierChangedAsync"
+                                            Data="@suppliers" TextProperty="Name" ValueProperty="Id"
+                                            AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="Select supplier" />
+                        </RadzenFormField>
+                        <RadzenButton Icon="add" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined" title="Add new supplier" Click="AddSupplierAsync" />
+                    </RadzenStack>
+                </RadzenColumn>
+                <RadzenColumn Size="12" SizeMD="3">
+                    <RadzenFormField Text="Supplier bill #" Style="width:100%">
+                        <RadzenTextBox @bind-Value="billNo" />
+                    </RadzenFormField>
+                </RadzenColumn>
+            </RadzenRow>
+            @if (supplierId > 0)
+            {
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
+                    We owe this supplier @Money(supplierBalance) @(IsEdit ? "(including this bill as it was saved)" : "before this bill").
+                </RadzenText>
+            }
+        </RadzenCard>
+
+        <RadzenCard class="rz-mb-3">
+            @* Item (a product from the Products table) → Article no. (automatic, read-only) → cost price ↔ profit % ↔ retail
+               price → "+" (the panel below: barcode, colour, size, qty; it uses these prices for every stock item it adds). *@
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+                <RadzenFormField Text="Item" Style="flex:1; min-width:200px">
+                    <RadzenDropDown @ref="itemDropDown" TValue="int?" OpenOnFocus="true" @bind-Value="pickId" @bind-Value:after="ItemPicked" Data="@productPicks" TextProperty="DisplayName" ValueProperty="Id"
+                                    AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowVirtualization="true"
+                                    Placeholder="Search product…" data-enter-first="true">
+                        <Template Context="p">
+                            @{ var item = (ProductPick)p; }
+                            <span>@item.DisplayName</span>
+                            <span style="float:right;opacity:.7">@Qty(item.OnHand) @item.Unit in stock</span>
+                        </Template>
+                    </RadzenDropDown>
+                </RadzenFormField>
+                @* Automatic and read-only: the next ART… no., reserved for the picked product on this purchase. *@
+                <RadzenFormField Text="Article no." Style="width:135px" class="readonly-field">
+                    <RadzenTextBox Value="@pickArticle" ReadOnly="true" tabindex="-1" title="Automatic, unique and read-only (ART000001…)" />
+                </RadzenFormField>
+                <RadzenFormField Text="Cost price" Style="width:115px">
+                    <RadzenNumeric TValue="decimal" @bind-Value="pickCost" @bind-Value:after="PickCostChanged" Min="0" ShowUpDown="false" Format="N2"
+                                   Disabled="@(pickId is null)" />
+                </RadzenFormField>
+                <RadzenFormField Text="Profit %" Style="width:85px">
+                    <RadzenNumeric TValue="decimal?" @bind-Value="pickProfit" @bind-Value:after="PickProfitChanged" ShowUpDown="false" Format="0.##"
+                                   Disabled="@(pickId is null)" title="On cost: retail = cost + profit %" />
+                </RadzenFormField>
+                <RadzenFormField Text="Retail price" Style="width:115px">
+                    <RadzenNumeric TValue="decimal" @bind-Value="pickRetail" @bind-Value:after="PickRetailChanged" Min="0" ShowUpDown="false" Format="N2"
+                                   Disabled="@(pickId is null)" title="Becomes the item's sale price when you save the purchase" />
+                </RadzenFormField>
+                <RadzenButton Icon="@(articleOpen ? "expand_less" : "add")" ButtonStyle="ButtonStyle.Secondary" Variant="@(articleOpen ? Variant.Flat : Variant.Outlined)"
+                              title="@(articleOpen ? "Collapse" : pickId is null ? "Pick an item first" : "Expand: colour, size, barcode and quantity")"
+                              Click="PlusClickedAsync" />
+            </RadzenStack>
+
+            @* The picked product's panel (opens on pick, "+" toggles it): barcode, size, colour, qty for the article no. above;
+               each new size / colour is a stock item with its own barcode. "+" with no item asks to pick one (new products:
+               Products page). *@
+            @if (articleOpen && pickId is int panelProductId && pickArticle is not null)
+            {
+                <div class="article-panel">
+                    <PurchaseArticleDialog @key="articlePanelKey" ProductId="panelProductId" ArticleNo="@pickArticle" Cost="pickCost" Retail="pickRetail" ReorderLevel="pickReorder"
+                                           Added="PanelLineAddedAsync" Cancelled="@(() => articleOpen = false)" />
+                </div>
+            }
+        </RadzenCard>
+        </div>
+
+        <RadzenCard data-enter-group="true">
+            @if (minimums.Any(m => m.Value > 0))
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small" class="rz-mb-2">
+                    Lines marked <RadzenIcon Icon="lock" Style="font-size:16px;vertical-align:middle" /> have stock that is already sold
+                    @(returnedQty.Any(r => r.Value > 0) ? "or returned to the supplier" : ""):
+                    their quantity can't go below that amount and they can't be removed. Everything else can be changed.
+                </RadzenAlert>
+            }
+            <RadzenDataGrid @ref="linesGrid" TItem="PurchaseLine" Data="@lines" Density="Density.Compact" EmptyText="No items added yet. Pick an item above.">
+                <Columns>
+                    <RadzenDataGridColumn Title="#" Width="45px"><Template>@(lines.IndexOf(context) + 1)</Template></RadzenDataGridColumn>
+                    @* Barcode identifies the piece bought; its article no. underneath, the full name on hover. Colour and size in their own columns. *@
+                    <RadzenDataGridColumn Title="Barcode" MinWidth="150px">
+                        <Template>
+                            @{ var lineProduct = productMap.GetValueOrDefault(context.StockItemId); }
+                            <div title="@lineProduct?.DisplayName">
+                                <strong>@(lineProduct?.Barcode ?? "no barcode")</strong>
+                                <div style="font-size:0.75rem; opacity:0.7">@lineProduct?.ArticleNo</div>
+                            </div>
+                            @if (MinFor(context.StockItemId) > 0)
+                            {
+                                <RadzenBadge BadgeStyle="BadgeStyle.Warning" Variant="Variant.Flat" class="rz-ms-2"
+                                             Text="@(ReturnedFor(context.StockItemId) > 0 ? $"🔒 min {Qty(MinFor(context.StockItemId))}" : $"🔒 {Qty(MinFor(context.StockItemId))} sold")"
+                                             title="@(ReturnedFor(context.StockItemId) > 0 ? "Stock from this line was sold or returned to the supplier, so quantity can't go lower." : "This much has already been sold, so quantity can't go lower.")" />
+                            }
+                            @if (ReturnedFor(context.StockItemId) > 0)
+                            {
+                                <RadzenBadge BadgeStyle="BadgeStyle.Info" Variant="Variant.Flat" class="rz-ms-1"
+                                             Text="@($"↩ {Qty(ReturnedFor(context.StockItemId))} returned")"
+                                             title="Returned to the supplier against this bill (see Purchase returns)." />
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Colour" Width="120px">
+                        <Template>@productMap.GetValueOrDefault(context.StockItemId)?.Colour</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Size" Width="80px">
+                        <Template><strong>@productMap.GetValueOrDefault(context.StockItemId)?.Size</strong></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Qty" Width="70px">
+                        <Template>
+                            @* One barcode per piece: a line is 1 piece (remove the line to buy fewer). Older lines of several can still be changed. *@
+                            @if (context.Qty == 1 && !oldMultiLines.Contains(context))
+                            {
+                                <span style="padding-left:0.5rem">1</span>
+                            }
+                            else
+                            {
+                                <RadzenNumeric TValue="decimal" @bind-Value="context.Qty" Min="0" ShowUpDown="false" Style="width:100%" />
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Cost" Width="120px">
+                        <Template>
+                            @* A new cost keeps the line's profit %: retail follows. *@
+                            <RadzenNumeric TValue="decimal" Value="@context.Cost" ValueChanged="@((decimal v) => LineCostChanged(context, v))"
+                                           Min="0" ShowUpDown="false" Format="N2" Style="width:100%" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    @* Profit % ↔ retail per line: typing one works out the other (Pricing). *@
+                    <RadzenDataGridColumn Title="Profit %" Width="100px">
+                        <Template>
+                            <RadzenNumeric TValue="decimal?" Value="@(context.SalePrice is { } r ? Pricing.ProfitPercent(context.Cost, r) : null)"
+                                           ValueChanged="@((decimal? v) => { if (v is { } pct) context.SalePrice = Pricing.RetailFromProfit(context.Cost, pct); })"
+                                           ShowUpDown="false" Format="0.##" Style="width:100%" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Retail" Width="120px">
+                        <Template><RadzenNumeric TValue="decimal?" @bind-Value="context.SalePrice" Min="0" ShowUpDown="false" Format="N2" Style="width:100%" /></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Amount" Width="140px" TextAlign="TextAlign.Right"><Template>@Money(context.Qty * context.Cost)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="60px">
+                        <Template>
+                            <RadzenButton Icon="@(CanRemove(context) ? "close" : "lock")" Size="ButtonSize.Small" Variant="Variant.Text"
+                                          ButtonStyle="@(CanRemove(context) ? ButtonStyle.Danger : ButtonStyle.Light)"
+                                          Disabled="@(!CanRemove(context))" title="@(CanRemove(context) ? "Remove line" : "Some of this stock is already sold or returned")"
+                                          Click="@(() => RemoveLine(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeLG="3">
+        @* Enter flow: Discount → Paid → Notes → [Save] *@
+        <RadzenCard data-enter-group="true">
+            <RadzenStack Gap="0.75rem">
+                <TotalLine Label="Items" Value="@lines.Count.ToString()" />
+                <TotalLine Label="Sub total" Value="@Money(SubTotal)" />
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Start" Gap="0.5rem">
+                    <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0 rz-pt-2">Discount</RadzenText>
+                    <DiscountInput @bind-Value="discountValue" @bind-IsPercent="discountIsPercent" SubTotal="@SubTotal" InputStyle="width:120px" />
+                </RadzenStack>
+                <TotalLine Label="Bill total" Value="@Money(Total)" Strong="true" />
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                    <RadzenFormField Text="Paid on this bill" Style="flex:1">
+                        <RadzenNumeric TValue="decimal" @bind-Value="paid" Min="0" ShowUpDown="false" Format="N2" />
+                    </RadzenFormField>
+                    <RadzenButton Text="Full" ButtonStyle="ButtonStyle.Light" Click="@(() => paid = Total)" />
+                </RadzenStack>
+                <TotalLine Label="Unpaid (goes to supplier balance)" Value="@Money(Total - paid)" Danger="@(Total - paid > 0)" />
+                <RadzenFormField Text="Notes" Style="width:100%">
+                    <RadzenTextArea @bind-Value="notes" Rows="2" />
+                </RadzenFormField>
+                <RadzenButton Text="@(IsEdit ? "Save changes" : "Save purchase")" Icon="save" Size="ButtonSize.Large" IsBusy="Busy"
+                              Click="SaveAsync" Disabled="@(lines.Count == 0)" data-enter-submit="true" />
+            </RadzenStack>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsEdit => Id is not null;
+
+    /// <summary>The saved bill to an .xlsx (ProductExcelService.ExportPurchaseAsync); offers to open it.</summary>
+    private async Task ExportAsync()
+    {
+        if (Id is not int id) return;
+        using var ms = new System.IO.MemoryStream();
+        var name = "";
+        if (!await RunAsync(async () => name = await Excel.ExportPurchaseAsync(id, ms))) return;
+        var path = await Desktop.PickSaveFileAsync(name, ProductExcelService.FileFilter);
+        if (path is null) return;
+        if (await RunAsync(() => Desktop.WriteFileAsync(path, ms.ToArray()))
+            && await ConfirmAsync($"Saved {System.IO.Path.GetFileName(path)}. Open it in Excel now?"))
+            await RunAsync(() => { Desktop.OpenFile(path); return Task.CompletedTask; });
+    }
+
+    private bool loaded, notFound;
+    private RadzenDataGrid<PurchaseLine> linesGrid = default!;
+    private List<ProductPick> productPicks = [];          // the Item list: products
+    private Dictionary<int, ProductLookup> productMap = []; // stock items, for the lines table
+    private List<Supplier> suppliers = [];
+    private Dictionary<int, decimal> minimums = [];
+    private Dictionary<int, decimal> returnedQty = [];
+
+    private DateTime purchaseDate = DateTime.Today;
+    private int supplierId;
+    private decimal supplierBalance;
+    private string? billNo, notes;
+    private decimal paid;
+
+    // Bill discount as typed (Rs, or % of the sub total); saved in rupees.
+    private decimal discountValue;
+    private bool discountIsPercent;
+    private decimal Discount => DiscountRules.Amount(SubTotal, discountValue, discountIsPercent);
+    private List<PurchaseLine> lines = [];
+
+    private int? pickId;
+    private RadzenDropDown<int?> itemDropDown = default!;
+    private decimal pickCost, pickRetail, pickReorder;
+    private decimal? pickProfit;
+
+    // Cost ↔ profit % ↔ retail (Pricing): typing profit % works out retail, typing retail works out profit %;
+    // a new cost keeps the profit % (retail follows), or works out the % when there is none yet.
+    private void PickCostChanged()
+    {
+        if (pickProfit is { } pct) pickRetail = Pricing.RetailFromProfit(pickCost, pct);
+        else pickProfit = Pricing.ProfitPercent(pickCost, pickRetail);
+    }
+
+    private void PickProfitChanged()
+    {
+        if (pickProfit is { } pct) pickRetail = Pricing.RetailFromProfit(pickCost, pct);
+    }
+
+    private void PickRetailChanged() => pickProfit = Pricing.ProfitPercent(pickCost, pickRetail);
+
+    private decimal SubTotal => lines.Sum(l => Math.Round(l.Qty * l.Cost, 2));
+    private decimal Total => SubTotal - Discount;
+
+    private decimal MinFor(int variantId) => minimums.GetValueOrDefault(variantId);
+    private decimal ReturnedFor(int variantId) => returnedQty.GetValueOrDefault(variantId);
+
+    // A line can go if the other lines of the same product still cover what's been sold.
+    private bool CanRemove(PurchaseLine line) =>
+        MinFor(line.StockItemId) <= 0 ||
+        lines.Where(l => l != line && l.StockItemId == line.StockItemId).Sum(l => l.Qty) >= MinFor(line.StockItemId);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loaded = false;
+        await LoadProductsAsync();
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (Id is int id)
+        {
+            var p = await Purchases.GetAsync(id);
+            if (p is null)
+            {
+                notFound = true;
+            }
+            else
+            {
+                purchaseDate = p.PurchaseDate;
+                supplierId = p.SupplierId;
+                billNo = p.BillNo;
+                discountValue = p.Discount;
+                discountIsPercent = false;
+                paid = p.Paid;
+                notes = p.Notes;
+                // Older lines have no retail price of their own: show the item's current one.
+                lines = p.Lines.Select(l => new PurchaseLine
+                {
+                    StockItemId = l.StockItemId, Qty = l.Qty, Cost = l.Cost, SalePrice = l.SalePrice ?? l.StockItem?.SalePrice,
+                }).ToList();
+                oldMultiLines = lines.Where(l => l.Qty != 1).ToHashSet();
+                minimums = await Purchases.GetMinimumQtyAsync(id);
+                returnedQty = await Purchases.GetReturnedQtyAsync(id);
+            }
+        }
+
+        // Keep the bill's supplier in the list even if it was made inactive.
+        suppliers = await db.Suppliers.AsNoTracking().Where(s => s.IsActive || s.Id == supplierId).OrderBy(s => s.Name).ToListAsync();
+        await SupplierChangedAsync();
+        loaded = true;
+    }
+
+    private async Task LoadProductsAsync()
+    {
+        productPicks = await Reports.GetProductPicksAsync();
+        productMap = (await Reports.GetProductLookupAsync()).ToDictionary(p => p.Id);
+    }
+
+    private async Task SupplierChangedAsync() =>
+        supplierBalance = supplierId > 0 ? await Reports.GetSupplierBalanceAsync(supplierId) : 0;
+
+    // The article no. reserved per product on this purchase (picking the same product again keeps it).
+    private string? pickArticle;
+    private readonly Dictionary<int, string> reservedArticles = [];
+
+    /// <summary>
+    /// Picking a product fills in cost / profit % / retail (from its latest stock item), shows its new article no.
+    /// (automatic, read-only) and opens its panel (barcode, size, colour, qty).
+    /// </summary>
+    private async Task ItemPicked()
+    {
+        pickArticle = null;
+        if (pickId is int id && productPicks.FirstOrDefault(p => p.Id == id) is { } p)
+        {
+            pickCost = p.PurchasePrice;
+            pickRetail = p.SalePrice;
+            pickReorder = p.ReorderLevel;
+            pickProfit = Pricing.ProfitPercent(pickCost, pickRetail);
+            if (!reservedArticles.TryGetValue(id, out pickArticle))
+                await RunAsync(async () =>
+                {
+                    await using var db = await DbFactory.CreateDbContextAsync();
+                    reservedArticles[id] = pickArticle = await ProductCodes.NextArticleNoAsync(db);
+                });
+        }
+        else
+        {
+            pickCost = pickRetail = pickReorder = 0;
+            pickProfit = null;
+        }
+        articleOpen = pickId is not null;
+        articlePanelKey++;
+    }
+
+    /// <summary>
+    /// "+" only expands / collapses the picked item's panel (colour, size, barcode, qty) — never a pop-up. The item gives
+    /// brand, category and name, so with no item picked it asks for one (new product types: Products page).
+    /// </summary>
+    private async Task PlusClickedAsync()
+    {
+        if (pickId is null)
+        {
+            Toast(NotificationSeverity.Info, "Pick the item first — its colours, sizes and quantities open below it.");
+            await itemDropDown.FocusAsync();
+            return;
+        }
+        articleOpen = !articleOpen;
+        articlePanelKey++;
+    }
+
+    /// <summary>A line's new cost keeps its profit %, so its retail price follows (or the % is worked out when it has none).</summary>
+    private static void LineCostChanged(PurchaseLine line, decimal cost)
+    {
+        var profit = line.SalePrice is { } retail ? Pricing.ProfitPercent(line.Cost, retail) : null;
+        line.Cost = cost;
+        if (profit is { } pct) line.SalePrice = Pricing.RetailFromProfit(cost, pct);
+    }
+
+    // Pieces (stock items) created by the "+" panel on this screen: removing their line deletes them again (never used).
+    private readonly HashSet<int> newPieces = [];
+    // Lines of an older bill with qty other than 1 (from before one barcode per piece): their qty stays editable.
+    private HashSet<PurchaseLine> oldMultiLines = [];
+
+    private async Task RemoveLine(PurchaseLine line)
+    {
+        if (!CanRemove(line)) return;
+        if (newPieces.Remove(line.StockItemId) && !lines.Any(l => l != line && l.StockItemId == line.StockItemId))
+            await RunAsync(() => StockItems.DeleteNewPieceAsync(line.StockItemId));
+        lines.Remove(line);
+        await linesGrid.Reload();
+    }
+
+    private async Task AddSupplierAsync()
+    {
+        var name = await Dialogs.OpenAsync<NamePromptDialog>("Add supplier",
+            new Dictionary<string, object?> { [nameof(NamePromptDialog.Label)] = "Supplier name" }, new DialogOptions { Width = "420px" });
+        if (name is not string { Length: > 0 } n) return;
+        var supplier = new Supplier { Name = n };
+        await RunAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Suppliers.Add(supplier);
+            await db.SaveChangesAsync();
+            suppliers = await db.Suppliers.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync();
+            supplierId = supplier.Id;
+            supplierBalance = 0;
+        }, $"Supplier \"{n}\" added");
+    }
+
+    // "+" panel under the Item row (PurchaseArticleDialog, inline) for the picked item's article.
+    private bool articleOpen;
+    private int articlePanelKey; // a fresh panel each time it opens / an item is picked
+
+    /// <summary>
+    /// Each Add in the panel: one new piece per qty, each with its own barcode and its own line of qty 1 (owner: one
+    /// barcode per piece). The item and its panel stay open for the next colour / size.
+    /// </summary>
+    private async Task PanelLineAddedAsync(List<PurchaseLine> added)
+    {
+        await LoadProductsAsync(); // the new pieces must be in the item list to show their names
+        foreach (var l in added)
+        {
+            newPieces.Add(l.StockItemId);
+            lines.Add(new PurchaseLine { StockItemId = l.StockItemId, Qty = l.Qty, Cost = l.Cost, SalePrice = l.SalePrice });
+        }
+        await linesGrid.Reload();
+    }
+
+    private async Task SaveAsync()
+    {
+        var purchase = new Purchase
+        {
+            Id = Id ?? 0,
+            PurchaseDate = purchaseDate.Date,
+            SupplierId = supplierId,
+            BillNo = string.IsNullOrWhiteSpace(billNo) ? null : billNo.Trim(),
+            Discount = Discount,
+            Paid = paid,
+            Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(),
+            Lines = lines.Select(l => new PurchaseLine { StockItemId = l.StockItemId, Qty = l.Qty, Cost = l.Cost, SalePrice = l.SalePrice }).ToList(),
+        };
+
+        if (IsEdit)
+        {
+            if (await RunAsync(() => Purchases.UpdateAsync(purchase), $"Purchase #{Id} updated, stock adjusted"))
+                Nav.NavigateTo("purchases");
+            return;
+        }
+        // A new purchase goes on to its barcode labels (one per piece; printing is still a button press there).
+        var newId = 0;
+        if (await RunAsync(async () => newId = await Purchases.CreateAsync(purchase), "Purchase saved, stock updated — print its labels"))
+            Nav.NavigateTo($"purchases/{newId}/labels");
+    }
+}

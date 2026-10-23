@@ -1,0 +1,9 @@
+@inject NavigationManager Nav
+
+@* Shown by AuthorizeRouteView when the user's role lacks the screen's right. *@
+<RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Title="No access to this screen">
+    Your role doesn't have the right to open this screen. Ask the owner (Admin) to add it on the Users &amp; Roles screen.
+    <div class="rz-mt-2">
+        <RadzenButton Text="Go to the start screen" Icon="home" Size="ButtonSize.Small" Click="@(() => Nav.NavigateTo(""))" />
+    </div>
+</RadzenAlert>

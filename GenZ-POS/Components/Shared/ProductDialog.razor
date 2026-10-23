@@ -1,0 +1,311 @@
+@inherits PageBase
+
+@* One product = one article (company, category, name, pack, unit). Its article no. is automatic (ProductCodes) and
+   not shown here. A new product is saved with one plain size / colour (StockItem) carrying the prices, barcode
+   and opening stock below; more sizes / colours come from the purchase screen's "+" panel or Excel. *@
+@if (model is null)
+{
+    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+}
+else
+{
+    <RadzenTemplateForm TItem="Product" Data="@model" Submit="SaveAsync">
+        @* ---------- What is it ---------- *@
+        <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mb-2" Style="color:var(--rz-primary)">PRODUCT DETAILS</RadzenText>
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Start" Gap="0.5rem">
+                    <RadzenStack Gap="0" Style="flex:1">
+                        <RadzenFormField Text="Company / brand *" Style="width:100%">
+                            <RadzenDropDown TValue="int?" OpenOnFocus="true" Name="CompanyId" @bind-Value="companyId" Data="@companies" TextProperty="Name" ValueProperty="Id"
+                                            AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                                            Placeholder="@(companies.Count == 0 ? "No companies yet, click + to add one" : "Select company")" />
+                        </RadzenFormField>
+                        <RadzenRequiredValidator Component="CompanyId" Text="Select a company" />
+                    </RadzenStack>
+                    <RadzenButton Icon="add" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined" title="Add new company"
+                                  Click="AddCompanyAsync" class="rz-mt-2" />
+                </RadzenStack>
+            </RadzenColumn>
+
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenStack Gap="0">
+                    <RadzenFormField Text="Category *" Style="width:100%">
+                        <RadzenDropDown TValue="int?" OpenOnFocus="true" Name="CategoryId" @bind-Value="categoryId" @bind-Value:after="CategoryChanged"
+                                        Data="@categories" TextProperty="Name" ValueProperty="Id" Placeholder="Select category" />
+                    </RadzenFormField>
+                    <RadzenRequiredValidator Component="CategoryId" Text="Select a category" />
+                </RadzenStack>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Start" Gap="0.5rem">
+                    <RadzenStack Gap="0" Style="flex:1">
+                        <RadzenFormField Text="Sub-category *" Style="width:100%">
+                            <RadzenDropDown TValue="int?" OpenOnFocus="true" Name="SubCategoryId" @bind-Value="subCategoryId" Data="@SubsOfCategory" TextProperty="Name" ValueProperty="Id"
+                                            Disabled="@(categoryId is null)"
+                                            Placeholder="@(categoryId is null ? "Pick a category first" : "Select sub-category")" />
+                        </RadzenFormField>
+                        <RadzenRequiredValidator Component="SubCategoryId" Text="Select a sub-category" />
+                    </RadzenStack>
+                    <RadzenButton Icon="add" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined" title="Add sub-category"
+                                  Disabled="@(categoryId is null)" Click="AddSubCategoryAsync" class="rz-mt-2" />
+                </RadzenStack>
+            </RadzenColumn>
+
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Product name *" Style="width:100%">
+                    <RadzenTextBox Name="Name" @bind-Value="model.Name" MaxLength="150" Placeholder="e.g. Weather Shield" />
+                </RadzenFormField>
+                <RadzenDataAnnotationValidator Component="Name" />
+            </RadzenColumn>
+            <RadzenColumn Size="6" SizeMD="3">
+                <RadzenFormField Text="Pack size" Style="width:100%">
+                    <RadzenAutoComplete Name="PackSize" @bind-Value="model.PackSize" Data="@PackSizes" OpenOnFocus="true" MaxLength="40"
+                                        Placeholder="Quarter, Gallon…" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="6" SizeMD="3">
+                <RadzenFormField Text="Stock counted in" Style="width:100%">
+                    <RadzenDropDown TValue="string" OpenOnFocus="true" Name="Unit" @bind-Value="model.Unit" Data="@Units" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                    <RadzenSwitch Name="IsActive" @bind-Value="model.IsActive" />
+                    <RadzenLabel Text="@(model.IsActive ? "Active" : "Inactive (hidden)")" Component="IsActive" />
+                </RadzenStack>
+            </RadzenColumn>
+        </RadzenRow>
+
+        @* ---------- New product: prices, barcode, opening stock ---------- *@
+        @if (model.Id == 0)
+        {
+            <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-4 rz-mb-2" Style="color:var(--rz-primary)">PRICING &amp; STOCK</RadzenText>
+            <RadzenRow Gap="1rem">
+                <RadzenColumn Size="6" SizeMD="3">
+                    <RadzenFormField Text="Purchase price (Rs)" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" Name="PurchasePrice" @bind-Value="newCost" Min="0" ShowUpDown="false" Format="N2" />
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="6" SizeMD="3">
+                    <RadzenFormField Text="Sale price (Rs)" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" Name="SalePrice" @bind-Value="newPrice" Min="0" ShowUpDown="false" Format="N2" />
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="6" SizeMD="3">
+                    <RadzenFormField Text="Low-stock alert at" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" Name="ReorderLevel" @bind-Value="newReorder" Min="0" ShowUpDown="false" />
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="6" SizeMD="3" class="rz-display-flex rz-align-items-center">
+                    @if (newPrice > 0 || newCost > 0)
+                    {
+                        var profit = newPrice - newCost;
+                        <RadzenStack Gap="0">
+                            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">Profit per unit</RadzenText>
+                            <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0"
+                                        Style="@(profit < 0 ? "color:var(--rz-danger)" : "color:var(--rz-success)")">
+                                @Money(profit)@(newCost > 0 ? $"  ({profit / newCost:P0})" : "")
+                            </RadzenText>
+                        </RadzenStack>
+                    }
+                </RadzenColumn>
+
+                @* Its barcode can be typed or scanned (e.g. the maker's barcode). *@
+                <RadzenColumn Size="12" SizeMD="6">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenFormField Text="Barcode" Style="flex:1">
+                            <RadzenTextBox Name="Barcode" @bind-Value="barcode" MaxLength="50" ReadOnly="@barcodeLocked"
+                                           Placeholder="@(barcodeLocked ? "Automatic" : "Type or scan a barcode")" />
+                        </RadzenFormField>
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem"
+                                     title="Ticked: the barcode is automatic. Untick to type or scan your own.">
+                            <RadzenCheckBox TValue="bool" Name="BarcodeLocked" Value="@barcodeLocked" ValueChanged="@(v => SetBarcodeLockedAsync(v))" />
+                            <RadzenLabel Text="Read-only" Component="BarcodeLocked" />
+                        </RadzenStack>
+                    </RadzenStack>
+                </RadzenColumn>
+                <RadzenColumn Size="6" SizeMD="3">
+                    <RadzenFormField Text="Opening stock (already in shop)" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" Name="OpeningQty" @bind-Value="openingQty" Min="0" ShowUpDown="false" />
+                    </RadzenFormField>
+                </RadzenColumn>
+            </RadzenRow>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem" class="rz-mt-6">
+            <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(false))" />
+            @if (model.Id == 0)
+            {
+                <RadzenButton Text="Save & add another" Icon="playlist_add" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined"
+                              IsBusy="Busy" Click="@(() => SaveAsync(addAnother: true))" />
+            }
+            <RadzenButton ButtonType="ButtonType.Submit" Text="Save" Icon="save" IsBusy="Busy" />
+        </RadzenStack>
+    </RadzenTemplateForm>
+}
+
+@code {
+    [Parameter] public int ProductId { get; set; }
+
+    [Inject] private StockItemService Variants { get; set; } = default!;
+
+    private Product? model;
+    private int? companyId, categoryId, subCategoryId;
+
+    // ---------- new product: its one plain size / colour ----------
+    private string? barcode, autoBarcode;
+    private bool barcodeLocked = true;
+    private decimal newCost, newPrice, newReorder, openingQty;
+
+    private List<Company> companies = [];
+    private List<Category> categories = [];
+    private List<SubCategory> subCategories = [];
+
+    private IEnumerable<SubCategory> SubsOfCategory => subCategories.Where(s => s.CategoryId == categoryId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            Product loaded;
+            if (ProductId == 0)
+            {
+                loaded = new Product();
+                barcode = autoBarcode = await ProductCodes.NextBarcodeAsync(db);
+            }
+            else
+            {
+                loaded = await db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.Id == ProductId)
+                    ?? throw new BusinessException("This product no longer exists.");
+                companyId = loaded.CompanyId;
+                subCategoryId = loaded.SubCategoryId;
+            }
+
+            await LoadListsAsync(db);
+            categoryId = subCategories.FirstOrDefault(s => s.Id == subCategoryId)?.CategoryId;
+            model = loaded;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+            Dialogs.Close(false);
+        }
+    }
+
+    private async Task LoadListsAsync(AppDbContext db)
+    {
+        // Keep the product's current company in the list even if it was made inactive.
+        companies = await db.Companies.AsNoTracking().Where(c => c.IsActive || c.Id == companyId).OrderBy(c => c.Name).ToListAsync();
+        categories = await db.Categories.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        subCategories = await db.SubCategories.AsNoTracking().OrderBy(s => s.Name).ToListAsync();
+    }
+
+    private void CategoryChanged()
+    {
+        if (subCategoryId is int id && subCategories.FirstOrDefault(s => s.Id == id)?.CategoryId != categoryId)
+            subCategoryId = null;
+        // Only one choice? Pick it.
+        if (subCategoryId is null && SubsOfCategory.Count() == 1)
+            subCategoryId = SubsOfCategory.First().Id;
+    }
+
+    private async Task AddCompanyAsync()
+    {
+        if (await AskNameAsync("Add company", "Company / brand name") is not string name) return;
+        var company = new Company { Name = name };
+        await RunAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Companies.Add(company);
+            await db.SaveChangesAsync();
+            companyId = company.Id;
+            await LoadListsAsync(db);
+        }, $"Company \"{name}\" added");
+    }
+
+    private async Task AddSubCategoryAsync()
+    {
+        if (categoryId is not int catId) return;
+        var catName = categories.First(c => c.Id == catId).Name;
+        if (await AskNameAsync($"Add sub-category to {catName}", "Sub-category name") is not string name) return;
+        var sub = new SubCategory { CategoryId = catId, Name = name };
+        await RunAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.SubCategories.Add(sub);
+            await db.SaveChangesAsync();
+            subCategoryId = sub.Id;
+            await LoadListsAsync(db);
+        }, $"Sub-category \"{name}\" added");
+    }
+
+    private async Task<string?> AskNameAsync(string title, string label)
+    {
+        var result = await Dialogs.OpenAsync<NamePromptDialog>(title,
+            new Dictionary<string, object?> { [nameof(NamePromptDialog.Label)] = label },
+            new DialogOptions { Width = "420px" });
+        return result is string { Length: > 0 } s ? s : null;
+    }
+
+    private Task SaveAsync() => SaveAsync(addAnother: false);
+
+    private async Task SaveAsync(bool addAnother)
+    {
+        if (model is null) return;
+        if (companyId is null || subCategoryId is null || string.IsNullOrWhiteSpace(model.Name))
+        {
+            Toast(NotificationSeverity.Warning, "Company, category, sub-category and product name are required.");
+            return;
+        }
+
+        // A fresh entity per attempt: the form's model is never attached to a context, so a failed save
+        // can't leave it half-saved and a retry inserts cleanly. Max discount is kept as it is
+        // (its first stock item gets the next ART… article no.).
+        var product = new Product
+        {
+            Id = model.Id, CompanyId = companyId.Value, SubCategoryId = subCategoryId.Value, Name = model.Name,
+            PackSize = model.PackSize, Unit = model.Unit,
+            MaxDiscountPercent = model.MaxDiscountPercent, IsActive = model.IsActive,
+        };
+        List<StockItemToCreate> toCreate = model.Id == 0 ? [new StockItemToCreate(null, null, openingQty, Clean(barcode))] : [];
+
+        ProductSaveResult? result = null;
+        if (!await RunAsync(async () => result = await Variants.SaveAsync(product, [], toCreate, new StockItemPrices(newCost, newPrice, newReorder))))
+            return;
+
+        Toast(NotificationSeverity.Success, $"\"{product.Name.Trim()}\" saved" + (result!.ArticleNo is { } art ? $" · Article {art}" : ""), 5000);
+
+        if (addAnother)
+        {
+            // Keep company / category / unit so a range of products of one brand is quick to enter.
+            model = new Product { Unit = model.Unit };
+            newCost = newPrice = newReorder = openingQty = 0;
+            barcodeLocked = true;
+            autoBarcode = null;
+            await SetBarcodeLockedAsync(true);
+        }
+        else
+        {
+            Dialogs.Close(true);
+        }
+    }
+
+    /// <summary>Ticking "Read-only" again puts the automatic barcode back.</summary>
+    private async Task SetBarcodeLockedAsync(bool locked)
+    {
+        barcodeLocked = locked;
+        if (!locked) return;
+        if (autoBarcode is null)
+            await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                autoBarcode = await ProductCodes.NextBarcodeAsync(db);
+            });
+        barcode = autoBarcode;
+    }
+
+    private static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+}

@@ -1,0 +1,192 @@
+@page "/reports/item-sales"
+@attribute [Authorize(Policy = Permissions.ReportsItemSales)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="no-print">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Item / Brand Sales</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Print" Icon="print" ButtonStyle="ButtonStyle.Light" Click="PrintAsync" Disabled="@(rows is null)" />
+        <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportAsync" Disabled="@(rows is null)" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard class="rz-mb-3 no-print">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="LoadAsync" />
+        <RadzenFormField Text="Group by" Style="width:150px">
+            <RadzenDropDown TValue="ItemSalesGroup" @bind-Value="group" @bind-Value:after="LoadAsync" Data="@groupOptions" TextProperty="Text" ValueProperty="Value" />
+        </RadzenFormField>
+        <RadzenFormField Text="Company" Style="width:200px">
+            <RadzenDropDown TValue="int?" @bind-Value="companyId" @bind-Value:after="LoadAsync" Data="@companies" TextProperty="Name" ValueProperty="Id"
+                            AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="All companies" />
+        </RadzenFormField>
+        <RadzenFormField Text="Category" Style="width:200px">
+            <RadzenDropDown TValue="int?" @bind-Value="categoryId" @bind-Value:after="LoadAsync" Data="@categories" TextProperty="Name" ValueProperty="Id"
+                            AllowClear="true" Placeholder="All categories" />
+        </RadzenFormField>
+        <RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="LoadAsync" IsBusy="@loading" class="rz-mb-2" />
+    </RadzenStack>
+</RadzenCard>
+
+@if (rows is null)
+{
+    if (loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    }
+}
+else
+{
+    <RadzenCard>
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem" class="rz-mb-2">
+            <ReportHeader Title="@($"Sales by {GroupText(shownGroup).ToLowerInvariant()}")" From="@shownFrom" To="@shownTo">
+                @if (!string.IsNullOrEmpty(shownFilter))
+                {
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@shownFilter</RadzenText>
+                }
+            </ReportHeader>
+            <RadzenStack Gap="0.25rem" Style="width:300px">
+                <TotalLine Label="Net sales" Value="@Money(NetSales)" />
+                <TotalLine Label="Cost" Value="@Money(Cost)" />
+                <TotalLine Label="Profit" Value="@Money(NetSales - Cost)" Strong="true" Danger="@(NetSales - Cost < 0)" />
+            </RadzenStack>
+        </RadzenStack>
+
+        <RadzenDataGrid TItem="ItemSalesRow" Data="@rows" AllowPaging="@(!printAll)" PageSize="50" ShowPagingSummary="true"
+                        Density="Density.Compact" EmptyText="Nothing sold in this period.">
+            <Columns>
+                <RadzenDataGridColumn Title="@GroupText(shownGroup)">
+                    <Template>
+                        @if (shownGroup == ItemSalesGroup.Product)
+                        {
+                            <RadzenLink Path="@($"stock/{context.Key}/history")" Text="@context.Name" title="Item history" />
+                        }
+                        else
+                        {
+                            @context.Name
+                        }
+                    </Template>
+                    <FooterTemplate><strong>Total (@(rows!.Count))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Qty sold" Width="100px" TextAlign="TextAlign.Right">
+                    <Template>@Qty(context.QtySold) @context.Unit</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Qty returned" Width="110px" TextAlign="TextAlign.Right">
+                    <Template>@(context.QtyReturned == 0 ? "" : Qty(context.QtyReturned))</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Net qty" Width="100px" TextAlign="TextAlign.Right">
+                    <Template><strong>@Qty(context.NetQty)</strong></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Net sales" Width="140px" TextAlign="TextAlign.Right">
+                    <Template>@Money(context.NetSales)</Template>
+                    <FooterTemplate><strong>@Money(NetSales)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Cost" Width="140px" TextAlign="TextAlign.Right">
+                    <Template>@Money(context.Cost)</Template>
+                    <FooterTemplate><strong>@Money(Cost)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Profit" Width="140px" TextAlign="TextAlign.Right">
+                    <Template><span style="@(context.Profit < 0 ? "color:var(--rz-danger)" : null)">@Money(context.Profit)</span></Template>
+                    <FooterTemplate><strong>@Money(NetSales - Cost)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Margin" Width="85px" TextAlign="TextAlign.Right">
+                    <Template>@MarginText(context.Margin)</Template>
+                    <FooterTemplate><strong>@MarginText(TotalMargin)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
+            Net sales include each invoice's discount spread over its items, minus returns. Cost = purchase price at the time of sale.
+        </RadzenText>
+    </RadzenCard>
+}
+
+@code {
+    private record GroupOption(ItemSalesGroup Value, string Text);
+    private static readonly GroupOption[] groupOptions =
+        [new(ItemSalesGroup.Product, "Product"), new(ItemSalesGroup.Company, "Company"), new(ItemSalesGroup.Category, "Category")];
+
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+    private DateTime shownFrom, shownTo;
+    private ItemSalesGroup group = ItemSalesGroup.Product, shownGroup;
+    private int? companyId, categoryId;
+    private string? shownFilter;
+    private bool loading, printAll;
+    private int loadVersion;
+    private List<ItemSalesRow>? rows;
+    private List<Company> companies = [];
+    private List<Category> categories = [];
+
+    private decimal NetSales => rows?.Sum(r => r.NetSales) ?? 0;
+    private decimal Cost => rows?.Sum(r => r.Cost) ?? 0;
+    private decimal? TotalMargin => NetSales == 0 ? null : Math.Round((NetSales - Cost) / NetSales * 100, 1);
+
+    private static string GroupText(ItemSalesGroup g) => groupOptions.First(o => o.Value == g).Text;
+    private static string MarginText(decimal? m) => m is decimal v ? $"{v:0.#}%" : "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            companies = await db.Companies.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+            categories = await db.Categories.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        var (f, t, g, co, ca) = (from, to, group, companyId, categoryId);
+        loading = true;
+        try
+        {
+            var result = await Reports.GetItemSalesAsync(f, t, g, co, ca);
+            if (version != loadVersion) return;
+            rows = result;
+            (shownFrom, shownTo, shownGroup) = (f, t, g);
+            shownFilter = string.Join(" · ", new[]
+            {
+                companies.FirstOrDefault(c => c.Id == co)?.Name is { } cn ? $"Company: {cn}" : null,
+                categories.FirstOrDefault(c => c.Id == ca)?.Name is { } kn ? $"Category: {kn}" : null,
+            }.Where(s => s is not null));
+            printAll = false;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        printAll = true; // print every row, not just the current page
+        StateHasChanged();
+        await Task.Delay(150);
+        await Desktop.PrintAsync();
+    }
+
+    private async Task ExportAsync()
+    {
+        if (rows is null) return;
+        var lines = new List<object?[]> { new object?[] { GroupText(shownGroup), "Unit", "Qty sold", "Qty returned", "Net qty", "Net sales", "Cost", "Profit", "Margin %" } };
+        lines.AddRange(rows.Select(r => new object?[] { r.Name, r.Unit, r.QtySold, r.QtyReturned, r.NetQty, r.NetSales, r.Cost, r.Profit, r.Margin }));
+        lines.Add(["Total", null, null, null, null, NetSales, Cost, NetSales - Cost, TotalMargin]);
+
+        var path = await Desktop.SaveTextFileAsync($"Sales by {GroupText(shownGroup).ToLowerInvariant()} {shownFrom:yyyy-MM-dd} to {shownTo:yyyy-MM-dd}.csv",
+            "CSV files (*.csv)|*.csv", Csv(lines));
+        if (path is not null)
+            Toast(NotificationSeverity.Success, $"Saved to {path}");
+    }
+}

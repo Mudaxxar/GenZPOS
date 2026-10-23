@@ -1,0 +1,12 @@
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="@(Strong ? TextStyle.Subtitle1 : TextStyle.Body2)" class="rz-m-0">@Label</RadzenText>
+    <RadzenText TextStyle="@(Strong ? TextStyle.H6 : TextStyle.Body1)" class="rz-m-0 money"
+                Style="@(Danger ? "color:var(--rz-danger)" : null)">@Value</RadzenText>
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+    [Parameter] public bool Strong { get; set; }
+    [Parameter] public bool Danger { get; set; }
+}

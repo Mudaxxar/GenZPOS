@@ -1,0 +1,15 @@
+@* Paid / Partial / Unpaid chip for a bill or invoice. *@
+<RadzenBadge BadgeStyle="@style" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@text" />
+
+@code {
+    [Parameter] public decimal Total { get; set; }
+    [Parameter] public decimal Paid { get; set; }
+
+    private string text = "";
+    private BadgeStyle style;
+
+    protected override void OnParametersSet() =>
+        (text, style) = Paid >= Total ? ("Paid", BadgeStyle.Success)
+            : Paid > 0 ? ("Partial", BadgeStyle.Warning)
+            : ("Unpaid", BadgeStyle.Danger);
+}

@@ -1,0 +1,26 @@
+@* Type-friendly date field used everywhere instead of a bare RadzenDatePicker.
+   Type 14, 1410, 141026, 14/10, 14 oct, t (today), y (yesterday), +3 / -2 … or use the calendar button.
+   Use like:  <DateBox Label="Date" @bind-Value="date" />  (supports @bind-Value:after). *@
+
+<RadzenFormField Text="@Label" Style="@Style">
+    <RadzenDatePicker TValue="DateTime" Name="@Name" Value="@Value" ValueChanged="OnChanged"
+                      DateFormat="@DateInputFormat" ParseInput="ParseDate" AllowInput="true"
+                      ShowCalendarWeek="false" Placeholder="dd/mm/yyyy" Disabled="@Disabled"
+                      title="Type a date: 14, 1410, 14/10/26, t = today, y = yesterday, +3 / -2" />
+</RadzenFormField>
+
+@code {
+    [Parameter] public string Label { get; set; } = "Date";
+    [Parameter] public string? Name { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public DateTime Value { get; set; } = DateTime.Today;
+    [Parameter] public EventCallback<DateTime> ValueChanged { get; set; }
+
+    private async Task OnChanged(DateTime value)
+    {
+        if (value == Value) return;
+        Value = value.Date;
+        await ValueChanged.InvokeAsync(Value);
+    }
+}

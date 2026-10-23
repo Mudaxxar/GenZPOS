@@ -1,0 +1,194 @@
+@page "/"
+@inherits PageBase
+@inject ReportService Reports
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="rz-mb-4">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-m-0">@(ShowStats ? "Dashboard" : "Welcome")</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Visible="@Can(Permissions.SalesCreate)" Text="New Sale" Icon="point_of_sale" Click="@(() => Nav.NavigateTo("sales/new"))" />
+        <RadzenButton Visible="@Can(Permissions.PaymentsReceive)" Text="Receive Payment" Icon="payments" ButtonStyle="ButtonStyle.Secondary" Click="@(() => Nav.NavigateTo("payments"))" />
+        <RadzenButton Visible="@Can(Permissions.PurchasesManage)" Text="New Purchase" Icon="add_shopping_cart" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases/new"))" />
+    </RadzenStack>
+</RadzenStack>
+
+@if (!ShowStats)
+{
+    @* Roles without the dashboard right (e.g. Cashier) don't see sales, cash or profit figures. *@
+    <RadzenCard>
+        <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Hello @CurrentUser.Session?.DisplayName</RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-mt-2 rz-mb-0">Use the buttons above or the menu on the left to start.</RadzenText>
+    </RadzenCard>
+}
+else if (error is not null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem">
+            <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Couldn't load the dashboard. @error</RadzenText>
+            <RadzenButton Text="Retry" Icon="refresh" ButtonStyle="ButtonStyle.Danger" IsBusy="@loading" Click="LoadAsync" />
+        </RadzenStack>
+    </RadzenAlert>
+}
+else if (stats is null)
+{
+    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+}
+else
+{
+    <RadzenRow Gap="1rem" class="rz-mb-4">
+        <StatCard Title="Sales today" Value="@Money(stats.SalesToday)"
+                  Note="@($"{stats.InvoicesToday} invoice(s)" + (stats.ReturnsToday > 0 ? $" · returns {Money(stats.ReturnsToday)}" : ""))" Icon="point_of_sale" Href="sales" />
+        <StatCard Title="Cash today (net)" Value="@Money(stats.CashToday)" Danger="@(stats.CashToday < 0)"
+                  Note="@($"In {Money(stats.CashInToday)} · Out {Money(stats.CashOutToday)}" + (stats.NonCashInToday > 0 ? $" · bank/cheque {Money(stats.NonCashInToday)}" : ""))"
+                  Icon="payments" Href="reports/daybook" />
+        <StatCard Title="Sales this month" Value="@Money(stats.SalesThisMonth)"
+                  Note="@(stats.ReturnsThisMonth > 0 ? $"Invoiced {Money(stats.SalesThisMonth + stats.ReturnsThisMonth)} − returns {Money(stats.ReturnsThisMonth)}" : "After returns")"
+                  Icon="calendar_month" Href="reports/sales-profit" />
+        <StatCard Title="Gross profit this month" Value="@Money(stats.GrossProfitThisMonth)" Danger="@(stats.GrossProfitThisMonth < 0)"
+                  Note="@(stats.SalesThisMonth == 0 ? "Net sales − cost of goods" : $"Margin {Math.Round(stats.GrossProfitThisMonth / stats.SalesThisMonth * 100, 1):0.#}%")"
+                  Icon="trending_up" Href="reports/sales-profit" />
+        <StatCard Title="Customer receivable" Value="@Money(stats.Receivable)"
+                  Note="@($"{stats.ReceivableCount} customer(s)" + (stats.CustomerAdvances > 0 ? $" · advances {Money(stats.CustomerAdvances)}" : ""))"
+                  Icon="account_balance_wallet" Href="reports/receivables" />
+        <StatCard Title="We owe suppliers" Value="@Money(stats.Payable)"
+                  Note="@($"{stats.PayableCount} supplier(s) · paid today {Money(stats.PaidToSuppliersToday)}")" Icon="local_shipping" Href="reports/payables" />
+        <StatCard Title="Stock value" Value="@Money(stats.StockValue)" Note="Active items at purchase price" Icon="inventory_2" Href="stock" />
+        <StatCard Title="Low stock items" Value="@stats.LowStockCount.ToString()" Note="At or below alert level" Icon="warning" Href="stock?low=true" />
+        <StatCard Title="Out of stock" Value="@stats.OutOfStockCount.ToString()" Note="Active items with no stock" Icon="remove_shopping_cart" Href="stock?out=true"
+                  Danger="@(stats.OutOfStockCount > 0)" />
+    </RadzenRow>
+
+    <RadzenRow Gap="1rem">
+        <RadzenColumn Size="12" SizeLG="7">
+            <RadzenCard>
+                <RadzenText TextStyle="TextStyle.H6">Recent invoices</RadzenText>
+                <RadzenDataGrid TItem="Sale" Data="@recentSales" Density="Density.Compact" EmptyText="No invoices yet."
+                                RowClick="@(a => Nav.NavigateTo($"sales/{a.Data!.Id}"))" Style="cursor:pointer">
+                    <Columns>
+                        <RadzenDataGridColumn Property="Id" Title="#" Width="70px" />
+                        <RadzenDataGridColumn Title="Date" Width="120px"><Template>@Date(context.SaleDate)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Customer"><Template>@context.Customer?.Name</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Total" TextAlign="TextAlign.Right"><Template>@Money(context.Total)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Due" TextAlign="TextAlign.Right">
+                            <Template><span style="@(context.Due > 0 ? "color:var(--rz-danger)" : null)">@Money(context.Due)</span></Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenCard>
+        </RadzenColumn>
+        <RadzenColumn Size="12" SizeLG="5">
+            @* ---------- Sales returns summary (owner 2026-10-23) ---------- *@
+            <RadzenCard class="rz-mb-4">
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                    <RadzenText TextStyle="TextStyle.H6">Sales returns</RadzenText>
+                    @if (Can(Permissions.SaleReturnsManage))
+                    {
+                        <RadzenLink Path="sale-returns" Text="All returns" />
+                    }
+                </RadzenStack>
+                <RadzenRow Gap="0.75rem" class="rz-mb-3">
+                    <RadzenColumn Size="6" SizeMD="3">
+                        <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0">Today</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0"><strong>@Money(stats.ReturnsToday)</strong></RadzenText>
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">@stats.ReturnsTodayCount return(s)</RadzenText>
+                    </RadzenColumn>
+                    <RadzenColumn Size="6" SizeMD="3">
+                        <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0">This month</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0"><strong>@Money(stats.ReturnsThisMonth)</strong></RadzenText>
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">@stats.ReturnsThisMonthCount return(s)</RadzenText>
+                    </RadzenColumn>
+                    <RadzenColumn Size="6" SizeMD="3">
+                        <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0">Cash refunded</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0"><strong>@Money(stats.RefundedThisMonth)</strong></RadzenText>
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">this month · rest off balances</RadzenText>
+                    </RadzenColumn>
+                    <RadzenColumn Size="6" SizeMD="3">
+                        <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0">Return rate</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0" Style="@(stats.ReturnRateThisMonth >= 10 ? "color:var(--rz-danger)" : null)">
+                            <strong>@stats.ReturnRateThisMonth.ToString("0.#")%</strong>
+                        </RadzenText>
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">of this month's invoices</RadzenText>
+                    </RadzenColumn>
+                </RadzenRow>
+                <RadzenDataGrid TItem="SaleReturn" Data="@recentReturns" Density="Density.Compact" EmptyText="No returns yet."
+                                RowClick="@(a => { if (Can(Permissions.SaleReturnsManage)) Nav.NavigateTo($"sale-returns/{a.Data!.Id}"); })"
+                                Style="@(Can(Permissions.SaleReturnsManage) ? "cursor:pointer" : null)">
+                    <Columns>
+                        <RadzenDataGridColumn Property="Id" Title="#" Width="60px" />
+                        <RadzenDataGridColumn Title="Date" Width="110px"><Template>@Date(context.ReturnDate)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Customer">
+                            <Template>
+                                @context.Customer?.Name
+                                @if (context.SaleId is int invoice) { <span style="opacity:.6"> · inv #@invoice</span> }
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Total" Width="120px" TextAlign="TextAlign.Right"><Template>@Money(context.Total)</Template></RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenCard>
+
+            <RadzenCard>
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                    <RadzenText TextStyle="TextStyle.H6">Low stock</RadzenText>
+                    @if (stats.LowStockCount > lowStock.Count)
+                    {
+                        <RadzenLink Path="stock?low=true" Text="@($"See all {stats.LowStockCount}")" />
+                    }
+                </RadzenStack>
+                <RadzenDataGrid TItem="StockReportRow" Data="@lowStock" Density="Density.Compact" EmptyText="Nothing is low. 👍">
+                    <Columns>
+                        <RadzenDataGridColumn Title="Product">
+                            <Template>@context.Company · @context.Name @context.PackSize @context.Colour @context.Size</Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="On hand" Width="90px" TextAlign="TextAlign.Right">
+                            <Template>
+                                <RadzenBadge BadgeStyle="@(context.IsOut ? BadgeStyle.Danger : BadgeStyle.Warning)" Variant="Variant.Flat"
+                                             Text="@Qty(context.OnHand)" title="@(context.IsOut ? "Out of stock" : "Low")" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Reorder" Width="80px" TextAlign="TextAlign.Right"><Template>@Qty(context.ReorderLevel)</Template></RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+}
+
+@code {
+    private DashboardStats? stats;
+    private List<Sale> recentSales = [];
+    private List<SaleReturn> recentReturns = [];
+    private List<StockReportRow> lowStock = [];
+    private string? error;
+    private bool loading;
+
+    private bool ShowStats => Can(Permissions.DashboardView);
+
+    protected override Task OnInitializedAsync() => ShowStats ? LoadAsync() : Task.CompletedTask;
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            var newStats = await Reports.GetDashboardAsync();
+            var newLow = (await Reports.GetStockReportAsync(new StockReportFilter { Stock = StockLevelFilter.Low }, 0, 10)).Rows;
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            recentSales = await db.Sales.AsNoTracking().Include(s => s.Customer)
+                .OrderByDescending(s => s.Id).Take(10).ToListAsync();
+            recentReturns = await db.SaleReturns.AsNoTracking().Include(r => r.Customer)
+                .OrderByDescending(r => r.Id).Take(5).ToListAsync();
+            lowStock = newLow;
+            stats = newStats;
+            error = null;
+        }
+        catch (Exception ex)
+        {
+            error = FriendlyMessage(ex);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

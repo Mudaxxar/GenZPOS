@@ -1,0 +1,85 @@
+@inject NotificationService Notifications
+@inject DialogService Dialogs
+
+@* Barcode scanner box (New Sale, New Purchase, Item History). A USB / Bluetooth scanner "types" the code and presses
+   Enter (or Tab); the code is looked up by barcode, then article no., and Found is raised with the product.
+   An article no. shared by several sizes / colours opens VariantPickerDialog to choose one.
+   data-enter-skip keeps focus here after Enter so the next item can be scanned straight away. *@
+<div class="scan-box" data-enter-skip="true" data-enter-first="@(EnterFirst ? "true" : null)" style="@Style">
+    <RadzenFormField Text="@Label" Style="width:100%">
+        <Start><RadzenIcon Icon="barcode_scanner" /></Start>
+        <ChildContent>
+            <RadzenTextBox @ref="box" @bind-Value="code" @bind-Value:after="ScannedAsync" Placeholder="Scan, or type + Enter" MaxLength="50"
+                           autocomplete="off" Disabled="@Disabled" />
+        </ChildContent>
+    </RadzenFormField>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "Scan barcode";
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    /// <summary>Put the cursor here when the page opens.</summary>
+    [Parameter] public bool AutoFocus { get; set; }
+
+    /// <summary>In an Enter group: focus comes back here after the group's Add button (enter-nav.js).</summary>
+    [Parameter] public bool EnterFirst { get; set; }
+
+    private RadzenTextBox box = default!;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && AutoFocus && !Disabled)
+            await FocusAsync();
+    }
+
+    /// <summary>Puts the cursor in the box (ready for the next scan).</summary>
+    public async Task FocusAsync()
+    {
+        try { await box.FocusAsync(); }
+        catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or InvalidOperationException) { /* page closing */ }
+    }
+
+    /// <summary>Products that can be scanned (usually the page's item list).</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<ProductLookup> Products { get; set; } = [];
+
+    /// <summary>Raised once per scan with the matching product.</summary>
+    [Parameter] public EventCallback<ProductLookup> Found { get; set; }
+
+    private string? code;
+
+    private async Task ScannedAsync()
+    {
+        var scanned = code?.Trim();
+        code = null; // clear at once: the same code can be scanned again for qty + 1
+        if (string.IsNullOrEmpty(scanned)) return;
+
+        var matches = ProductLookup.MatchCode(Products, scanned);
+        if (matches.Count == 1)
+        {
+            await Found.InvokeAsync(matches[0]);
+        }
+        else if (matches.Count > 1)
+        {
+            // An article in several sizes / colours: pick one from the size × colour grid.
+            if (await Dialogs.OpenAsync<VariantPickerDialog>($"Article {scanned}",
+                    new Dictionary<string, object?>
+                    {
+                        [nameof(VariantPickerDialog.Variants)] = matches,
+                        [nameof(VariantPickerDialog.ArticleNo)] = scanned,
+                    },
+                    new DialogOptions { Width = "auto", Style = "max-width:95vw" }) is ProductLookup picked)
+                await Found.InvokeAsync(picked);
+        }
+        else
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Warning,
+                Duration = 5000,
+                Summary = $"No active product with barcode or article no. {scanned}",
+            });
+        }
+    }
+}

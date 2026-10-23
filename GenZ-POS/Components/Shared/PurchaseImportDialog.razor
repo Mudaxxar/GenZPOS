@@ -1,0 +1,226 @@
+@inherits PageBase
+@inject ProductExcelService Excel
+@inject DesktopService Desktop
+
+@* Stock from Excel as ONE purchase bill (owner 2026-10-23: "upload it for stock" with the first / default vendor).
+   The file is the Products layout (Products → Export to Excel, or a purchase exported from Purchases): one row = one
+   piece; an optional Qty column (N without a barcode = N new pieces). Supplier = the first one unless changed. Preview
+   first; Import = ProductExcelService.ImportPurchaseAsync (items + bill + stock in one transaction). Closes with the new
+   purchase id. *@
+<RadzenStack Gap="1rem">
+    <div data-enter-group="true">
+        <RadzenRow Gap="0.75rem" AlignItems="AlignItems.End">
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                    <RadzenFormField Text="Supplier *" Style="flex:1">
+                        <RadzenDropDown TValue="int" OpenOnFocus="true" @bind-Value="supplierId" Data="@suppliers" TextProperty="Name" ValueProperty="Id"
+                                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="Select supplier" />
+                    </RadzenFormField>
+                    <RadzenButton Icon="add" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined" title="Add new supplier" Click="AddSupplierAsync" />
+                </RadzenStack>
+            </RadzenColumn>
+            <RadzenColumn Size="6" SizeMD="2">
+                <DateBox Label="Date" @bind-Value="date" Style="width:100%" />
+            </RadzenColumn>
+            <RadzenColumn Size="6" SizeMD="3">
+                <RadzenFormField Text="Supplier bill #" Style="width:100%">
+                    <RadzenTextBox @bind-Value="billNo" MaxLength="50" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="6" SizeMD="3">
+                <RadzenFormField Text="Paid on bill" Style="width:100%">
+                    <RadzenNumeric TValue="decimal" @bind-Value="paid" Min="0" Format="N2" ShowUpDown="false" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+    </div>
+
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0"><RadzenIcon Icon="description" /> @System.IO.Path.GetFileName(FilePath)</RadzenText>
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenCheckBox Name="CreateMissing" @bind-Value="createMissing" @bind-Value:after="PreviewAsync" Disabled="@(loading || Busy)" />
+            <RadzenLabel Text="Create missing companies and sub-categories" Component="CreateMissing" />
+            <RadzenButton Icon="refresh" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Read the file again (after saving it in Excel)"
+                          Click="PreviewAsync" Disabled="@(loading || Busy)" />
+        </RadzenStack>
+    </RadzenStack>
+
+    @if (loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    }
+    else if (error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">@error</RadzenAlert>
+    }
+    else if (plan is not null)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center">
+            <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Text="@($"{Qty(plan.OpeningTotal)} piece(s) to buy")" />
+            <RadzenBadge BadgeStyle="BadgeStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"{plan.AddCount} new barcode(s)")" />
+            @if (plan.OpeningSkipped.Count > 0)
+            {
+                <RadzenBadge BadgeStyle="BadgeStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"{plan.OpeningSkipped.Count} already in stock (skipped)")" />
+            }
+            @if (plan.Errors.Count > 0)
+            {
+                <RadzenBadge BadgeStyle="BadgeStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"{plan.Errors.Count} with errors")" />
+            }
+            <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0" Style="margin-left:auto">Bill total: <strong>@Money(plan.PurchaseTotal)</strong></RadzenText>
+        </RadzenStack>
+
+        @if (plan.Errors.Count > 0)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0"
+                         Title="Nothing will be imported until these rows are fixed">
+                Fix them in Excel, save the file, then press the refresh button above.
+            </RadzenAlert>
+            <RadzenDataGrid TItem="ProductImportIssue" Data="@plan.Errors" Density="Density.Compact" AllowPaging="true" PageSize="8">
+                <Columns>
+                    <RadzenDataGridColumn Property="Row" Title="Excel row" Width="90px" />
+                    <RadzenDataGridColumn Property="Message" Title="Problem" />
+                </Columns>
+            </RadzenDataGrid>
+        }
+
+        @if (plan.OpeningSkipped.Count > 0)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0"
+                         Title="@($"{plan.OpeningSkipped.Count} piece(s) are already in stock or were bought before: not bought again")">
+                One barcode is one piece, so importing the same file twice never doubles the stock. Their price changes are still saved.
+                <ul class="rz-mb-0 rz-mt-1">
+                    @foreach (var s in plan.OpeningSkipped.Take(6))
+                    {
+                        <li>Row @s.Row — @s.Message</li>
+                    }
+                    @if (plan.OpeningSkipped.Count > 6) { <li>… and @(plan.OpeningSkipped.Count - 6) more</li> }
+                </ul>
+            </RadzenAlert>
+        }
+
+        @if (plan.NewCompanies.Count > 0 || plan.NewSubCategories.Count > 0)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">
+                @if (plan.NewCompanies.Count > 0) { <div>New companies: <strong>@string.Join(", ", plan.NewCompanies)</strong></div> }
+                @if (plan.NewSubCategories.Count > 0) { <div>New sub-categories: <strong>@string.Join(", ", plan.NewSubCategories)</strong></div> }
+            </RadzenAlert>
+        }
+
+        @if (buying.Count > 0)
+        {
+            <RadzenDataGrid TItem="ProductImportLine" Data="@buying" Density="Density.Compact" AllowPaging="true" PageSize="10" ShowPagingSummary="true">
+                <Columns>
+                    <RadzenDataGridColumn Title="Row" Width="60px"><Template>@context.Source.Row</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Article · Barcode" Width="200px">
+                        <Template>
+                            <strong>@(context.Source.ArticleNo ?? "new ART…") · @(context.Source.Barcode ?? "new SH…")</strong>
+                            @if (context.Action == ProductImportAction.Add)
+                            {
+                                <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Shade="Shade.Lighter" Text="New" class="rz-ms-1" />
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Colour · Size" Width="140px">
+                        <Template>@string.Join(" · ", new[] { context.Source.Shade, context.Source.Size }.Where(s => !string.IsNullOrEmpty(s)))</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Item">
+                        <Template>@string.Join(" · ", new[] { context.Source.Company, context.Source.Name, context.Source.PackSize }.Where(s => !string.IsNullOrEmpty(s)))</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Cost" Width="110px" TextAlign="TextAlign.Right"><Template>@Money(context.Cost)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Retail" Width="110px" TextAlign="TextAlign.Right">
+                        <Template>@(context.Source.SalePrice is { } p ? Money(p) : "—")</Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        }
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(null))" />
+        <RadzenButton Text="@ImportText" Icon="upload" IsBusy="Busy" Disabled="@(loading || plan?.CanImport != true || supplierId <= 0)" Click="ImportAsync" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public string FilePath { get; set; } = "";
+
+    private ProductImportPlan? plan;
+    private List<ProductImportLine> buying = [];
+    private List<Supplier> suppliers = [];
+    private int supplierId;
+    private DateTime date = DateTime.Today;
+    private string? billNo;
+    private decimal paid;
+    private bool createMissing = true, loading = true;
+    private string? error;
+
+    private string ImportText => plan is { CanImport: true }
+        ? $"Save purchase of {Qty(plan.OpeningTotal)} piece(s)"
+        : "Save purchase";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            suppliers = await db.Suppliers.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync();
+            // The default vendor: the first supplier ever added (lowest Id).
+            supplierId = suppliers.OrderBy(s => s.Id).FirstOrDefault()?.Id ?? 0;
+        }
+        await PreviewAsync();
+    }
+
+    private async Task PreviewAsync()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            await using var file = await Desktop.ReadFileAsync(FilePath);
+            plan = await Excel.PreviewAsync(file, createMissing, forPurchase: true);
+            buying = plan.Lines.Where(l => l.OpeningQty > 0).ToList();
+        }
+        catch (Exception ex)
+        {
+            plan = null;
+            buying = [];
+            error = FriendlyMessage(ex);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task AddSupplierAsync()
+    {
+        var name = await Dialogs.OpenAsync<NamePromptDialog>("Add supplier",
+            new Dictionary<string, object?> { [nameof(NamePromptDialog.Label)] = "Supplier name" }, new DialogOptions { Width = "420px" });
+        if (name is not string { Length: > 0 } n) return;
+        var supplier = new Supplier { Name = n };
+        await RunAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Suppliers.Add(supplier);
+            await db.SaveChangesAsync();
+            suppliers = await db.Suppliers.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync();
+            supplierId = supplier.Id;
+        }, $"Supplier \"{n}\" added");
+    }
+
+    private async Task ImportAsync()
+    {
+        if (plan is null || supplierId <= 0) return;
+        var notes = $"Imported from {System.IO.Path.GetFileName(FilePath)}";
+        var bill = new Purchase
+        {
+            SupplierId = supplierId, PurchaseDate = date, BillNo = string.IsNullOrWhiteSpace(billNo) ? null : billNo.Trim(), Paid = paid,
+            Notes = notes.Length > 250 ? notes[..250] : notes,
+        };
+        var id = 0;
+        if (await RunAsync(async () => id = await Excel.ImportPurchaseAsync(plan, bill)))
+        {
+            Toast(NotificationSeverity.Success, $"Purchase #{id} saved: {Qty(plan.OpeningTotal)} piece(s) in stock.", 6000);
+            Dialogs.Close(id);
+        }
+    }
+}

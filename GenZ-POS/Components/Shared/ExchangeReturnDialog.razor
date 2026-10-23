@@ -1,0 +1,123 @@
+@inherits PageBase
+@inject SaleReturnService SaleReturns
+
+@* Exchange on the New Sale screen (owner 2026-10-23): find what the customer brought back. Scan / type the piece's
+   barcode (→ the latest invoice it can still be returned from) or an invoice no. (→ its items still returnable), tick,
+   Add. Refund = what was paid for it (invoice rate less its share of that invoice's discount). Closes with
+   List<ExchangePick>. Items already in this exchange are not offered again. *@
+<RadzenStack Gap="0.75rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+        <RadzenFormField Text="Barcode of the returned piece, or invoice #" Style="flex:1; min-width:220px">
+            <Start><RadzenIcon Icon="qr_code_scanner" /></Start>
+            <ChildContent>
+                <RadzenTextBox @ref="codeBox" @bind-Value="code" @onkeydown="KeyAsync" data-enter-skip="true" Placeholder="e.g. SH000023 or 10" />
+            </ChildContent>
+        </RadzenFormField>
+        <RadzenButton Text="Find" Icon="search" IsBusy="@finding" Click="FindAsync" />
+    </RadzenStack>
+
+    @if (message is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small" class="rz-m-0">@message</RadzenAlert>
+    }
+
+    @if (found.Count > 0)
+    {
+        var first = found[0].Candidate;
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+            Invoice <strong>#@first.SaleId</strong> · @Date(first.SaleDate) · <strong>@first.CustomerName</strong>
+        </RadzenText>
+        <RadzenDataGrid TItem="ExchangePick" Data="@found" Density="Density.Compact" AllowPaging="false">
+            <Columns>
+                <RadzenDataGridColumn Width="50px" TextAlign="TextAlign.Center">
+                    <Template><RadzenCheckBox TValue="bool" @bind-Value="context.Selected" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Article · Barcode">
+                    <Template>
+                        @{ var l = context.Candidate.Line; }
+                        <strong>@string.Join(" · ", new[] { l.ArticleNo, l.Barcode }.Where(s => !string.IsNullOrWhiteSpace(s)))</strong>
+                        <div style="font-size:.8rem; opacity:.75; white-space:normal">
+                            @string.Join(" · ", new[] { l.Colour, l.Size is { Length: > 0 } sz ? $"Size {sz}" : null, l.ProductName }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                        </div>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Qty" Width="100px" TextAlign="TextAlign.Right">
+                    <Template>
+                        @if (context.Candidate.Line.Returnable > 1)
+                        {
+                            <RadzenNumeric TValue="decimal" @bind-Value="context.Qty" Min="1" Max="@context.Candidate.Line.Returnable" ShowUpDown="false" Style="width:100%" />
+                        }
+                        else
+                        {
+                            <span>1</span>
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Sold at" Width="110px" TextAlign="TextAlign.Right"><Template>@Money(context.Candidate.Line.Rate)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Refund" Width="120px" TextAlign="TextAlign.Right">
+                    <Template><strong>@Money(context.Amount)</strong></Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+        @if (found.Any(f => f.Amount < Math.Round(f.Qty * f.Candidate.Line.Rate, 2)))
+        {
+            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">That invoice had a discount: the refund is what the customer really paid.</RadzenText>
+        }
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(null))" />
+        <RadzenButton Text="@($"Add {found.Count(f => f.Selected)} returned item(s)")" Icon="assignment_return"
+                      Disabled="@(!found.Any(f => f.Selected))" Click="Add" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    /// <summary>(Invoice, stock item) pairs already in this exchange.</summary>
+    [Parameter] public IReadOnlyCollection<(int SaleId, int StockItemId)> Excluded { get; set; } = [];
+
+    private RadzenTextBox codeBox = default!;
+    private string? code, message;
+    private bool finding;
+    private List<ExchangePick> found = [];
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try { await codeBox.FocusAsync(); }
+        catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or InvalidOperationException) { /* closing */ }
+    }
+
+    private async Task KeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or "NumpadEnter") await FindAsync();
+    }
+
+    private async Task FindAsync()
+    {
+        var text = code?.Trim() ?? "";
+        if (text.Length == 0) return;
+        finding = true;
+        message = null;
+        try
+        {
+            var list = await SaleReturns.FindForExchangeAsync(text);
+            var left = list.Where(c => !Excluded.Contains((c.SaleId, c.Line.StockItemId))).ToList();
+            found = left.Select(c => new ExchangePick(c) { Selected = left.Count == 1 }).ToList();
+            message = list.Count == 0
+                ? $"Nothing to return for \"{text}\": no sold piece with this barcode (or it was returned already), and no invoice with this number that still has items."
+                : left.Count == 0 ? "Already added to this exchange." : null;
+        }
+        catch (Exception ex)
+        {
+            message = FriendlyMessage(ex);
+        }
+        finally
+        {
+            finding = false;
+            code = null;
+        }
+    }
+
+    private void Add() => Dialogs.Close(found.Where(f => f.Selected).ToList());
+}

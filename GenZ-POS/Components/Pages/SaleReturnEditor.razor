@@ -1,0 +1,219 @@
+@page "/sales/{SaleId:int}/return"
+@attribute [Authorize(Policy = Permissions.SaleReturnsManage)]
+@inherits PageBase
+@inject SaleService Sales
+@inject SaleReturnService SaleReturns
+@inject ReportService Reports
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Sales Return — Invoice #@SaleId</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Back to invoice" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo($"sales/{SaleId}"))" />
+        <RadzenButton Text="All returns" Icon="list" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("sale-returns"))" />
+    </RadzenStack>
+</RadzenStack>
+
+@if (loading)
+{
+    <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Style="height:4px" />
+}
+else if (error is not null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Title="Couldn't open this invoice">
+        @error
+    </RadzenAlert>
+}
+else if (sale is null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        Invoice #@SaleId was not found. It may have been deleted.
+    </RadzenAlert>
+}
+else
+{
+    @* Enter flow: Date → each Return qty → Cash refunded → Notes → [Save] *@
+    <RadzenRow Gap="1rem" data-enter-group="true">
+        <RadzenColumn Size="12" SizeLG="8">
+            <RadzenCard class="rz-mb-3">
+                <RadzenRow Gap="1rem" AlignItems="AlignItems.Center">
+                    <RadzenColumn Size="12" SizeMD="8">
+                        <div>Invoice # <strong>@sale.Id</strong> · @Date(sale.SaleDate) · total @Money(sale.Total)</div>
+                        <div>Customer: <strong>@sale.Customer?.Name</strong>@(string.IsNullOrEmpty(sale.Customer?.Phone) ? "" : $" · {sale.Customer.Phone}")</div>
+                        @if (!IsWalkIn)
+                        {
+                            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">Customer owes now: @Money(balance)</RadzenText>
+                        }
+                    </RadzenColumn>
+                    <RadzenColumn Size="12" SizeMD="4">
+                        <DateBox Label="Return date" @bind-Value="returnDate" Style="width:100%" />
+                    </RadzenColumn>
+                </RadzenRow>
+            </RadzenCard>
+
+            <RadzenCard>
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="rz-mb-2">
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Items on the invoice</RadzenText>
+                    <RadzenButton Text="Return everything" Icon="done_all" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                  Disabled="@(!lines.Any(l => l.Returnable > 0))" Click="ReturnAll" />
+                </RadzenStack>
+                @if (!lines.Any(l => l.Returnable > 0))
+                {
+                    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small" class="rz-mb-2">
+                        Everything on this invoice has already been returned.
+                    </RadzenAlert>
+                }
+                <RadzenDataGrid TItem="SaleReturnableLine" Data="@lines" Density="Density.Compact" EmptyText="This invoice has no items.">
+                    <Columns>
+                        @* Owner's order: Article no. · Barcode, then Colour · Size, then the product name. *@
+                        <RadzenDataGridColumn Title="Article · Barcode" MinWidth="170px">
+                            <Template>
+                                <strong>@string.Join(" · ", new[] { context.ArticleNo, context.Barcode }.Where(s => !string.IsNullOrWhiteSpace(s)))</strong>
+                                <div style="font-size:.8rem; opacity:.75; white-space:normal">
+                                    @string.Join(" · ", new[] { context.Colour, context.Size is { Length: > 0 } sz ? $"Size {sz}" : null, context.ProductName }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                                </div>
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Sold" Width="70px" TextAlign="TextAlign.Right"><Template>@Qty(context.Sold)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Returned before" Width="90px" TextAlign="TextAlign.Right"><Template>@(context.Returned == 0 ? "" : Qty(context.Returned))</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Can return" Width="90px" TextAlign="TextAlign.Right"><Template>@Qty(context.Returnable)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Return qty" Width="110px">
+                            <Template>
+                                <RadzenNumeric TValue="decimal" @bind-Value="context.ReturnQty" Min="0" Max="@context.Returnable" ShowUpDown="false"
+                                               Disabled="@(context.Returnable <= 0)" Style="width:100%"
+                                               data-enter-first="@(context == FirstReturnable ? "true" : null)" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Rate" Width="110px" TextAlign="TextAlign.Right"><Template>@Money(context.Rate)</Template></RadzenDataGridColumn>
+                        @if (sale.Discount > 0)
+                        {
+                            <RadzenDataGridColumn Title="After discount" Width="120px" TextAlign="TextAlign.Right"><Template>@Money(context.NetRate)</Template></RadzenDataGridColumn>
+                        }
+                        <RadzenDataGridColumn Title="Amount" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(LineAmount(context))</Template></RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+                @if (sale.Discount > 0)
+                {
+                    <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2" Style="display:block">
+                        The invoice had a discount of @Money(sale.Discount)
+                        (@((sale.SubTotal == 0 ? 0 : sale.Discount / sale.SubTotal * 100).ToString("0.##"))%), so each item is refunded at
+                        its rate less its share of that discount — what the customer really paid.
+                    </RadzenText>
+                }
+            </RadzenCard>
+        </RadzenColumn>
+
+        <RadzenColumn Size="12" SizeLG="4">
+            <RadzenCard>
+                <RadzenStack Gap="0.75rem">
+                    <TotalLine Label="Items returned" Value="@lines.Count(l => l.ReturnQty > 0).ToString()" />
+                    <TotalLine Label="Return total" Value="@Money(Total)" Strong="true" />
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                        <RadzenFormField Text="Cash refunded now" Style="flex:1">
+                            <RadzenNumeric TValue="decimal" Value="@RefundShown" ValueChanged="@((decimal v) => refunded = v)" Min="0" Max="@Total"
+                                           ShowUpDown="false" Format="N2" Disabled="@IsWalkIn" />
+                        </RadzenFormField>
+                        <RadzenButton Text="Refund all" ButtonStyle="ButtonStyle.Light" Disabled="@IsWalkIn" Click="@(() => refunded = Total)" />
+                    </RadzenStack>
+                    @if (IsWalkIn)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                            Walk-in customers have no account, so the whole amount is refunded in cash.
+                        </RadzenText>
+                    }
+                    @if (Total > 0)
+                    {
+                        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+                            @if (RefundShown > 0)
+                            {
+                                <div>@Money(RefundShown) cash goes back to the customer.</div>
+                            }
+                            @if (Credit > 0)
+                            {
+                                <div>Customer's balance goes down by @Money(Credit) (owes @Money(balance) → @Money(balance - Credit)).</div>
+                            }
+                            <div>Stock comes back in.</div>
+                        </RadzenAlert>
+                    }
+                    @if (RefundShown > Total)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="color:var(--rz-danger)">Cash refunded can't be more than the return total.</RadzenText>
+                    }
+                    <RadzenFormField Text="Notes / reason" Style="width:100%">
+                        <RadzenTextArea @bind-Value="notes" Rows="2" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenButton Text="Save return" Icon="save" Size="ButtonSize.Large" IsBusy="Busy" Click="SaveAsync"
+                                  Disabled="@(!lines.Any(l => l.ReturnQty > 0))" data-enter-submit="true" />
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+}
+
+@code {
+    [Parameter] public int SaleId { get; set; }
+
+    private Sale? sale;
+    private List<SaleReturnableLine> lines = [];
+    private bool loading = true;
+    private string? error;
+    private decimal balance, refunded;
+    private DateTime returnDate = DateTime.Today;
+    private string? notes;
+
+    private bool IsWalkIn => sale?.CustomerId == Customer.WalkInId;
+    /// <summary>Same amount the service saves (rate less the line's share of the invoice discount).</summary>
+    private static decimal LineAmount(SaleReturnableLine l) => l.AmountFor(l.ReturnQty);
+    private decimal Total => lines.Sum(LineAmount);
+    /// <summary>Walk-in: always the full total.</summary>
+    private decimal RefundShown => IsWalkIn ? Total : refunded;
+    private decimal Credit => Math.Max(0, Total - RefundShown);
+    private SaleReturnableLine? FirstReturnable => lines.FirstOrDefault(l => l.Returnable > 0);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            sale = await Sales.GetAsync(SaleId);
+            if (sale is not null)
+            {
+                lines = await SaleReturns.GetReturnableAsync(SaleId);
+                balance = IsWalkIn ? 0 : await Reports.GetCustomerBalanceAsync(sale.CustomerId);
+            }
+        }
+        catch (Exception ex)
+        {
+            error = FriendlyMessage(ex);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void ReturnAll()
+    {
+        foreach (var l in lines)
+            l.ReturnQty = l.Returnable;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (sale is null) return;
+        var ret = new SaleReturn
+        {
+            SaleId = sale.Id,
+            CustomerId = sale.CustomerId,
+            ReturnDate = returnDate.Date,
+            Refunded = RefundShown,
+            Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(),
+            Lines = lines.Where(l => l.ReturnQty > 0)
+                .Select(l => new SaleReturnLine { StockItemId = l.StockItemId, Qty = l.ReturnQty, Rate = l.Rate })
+                .ToList(),
+        };
+        var id = 0;
+        if (await RunAsync(async () => id = await SaleReturns.CreateAsync(ret), $"Return saved for invoice #{sale.Id}, stock back in"))
+            Nav.NavigateTo($"sale-returns/{id}");
+    }
+}

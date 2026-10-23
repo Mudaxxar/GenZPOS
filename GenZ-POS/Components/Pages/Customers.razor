@@ -1,0 +1,123 @@
+@page "/customers"
+@attribute [Authorize(Policy = Permissions.CustomersManage)]
+@inherits PageBase
+@inject ReportService Reports
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Customers</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Receivables report" Icon="call_received" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("reports/receivables"))" />
+        <RadzenButton Text="Add customer" Icon="person_add" Click="@(() => OpenAsync(0))" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <RadzenTextBox Placeholder="Search name or phone…" @bind-Value="search" @bind-Value:after="LoadAsync" Style="flex:1; min-width:180px" />
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+            <RadzenCheckBox Name="OnlyDue" @bind-Value="onlyDue" />
+            <RadzenLabel Text="Only with balance" Component="OnlyDue" />
+        </RadzenStack>
+        <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0">Receivable: <strong style="@(Receivable > 0 ? "color:var(--rz-danger)" : null)">@Money(Receivable)</strong></RadzenText>
+        @if (Advance > 0)
+        {
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" title="Customers who paid more than they owe">Advances: <strong>@Money(Advance)</strong></RadzenText>
+        }
+    </RadzenStack>
+
+    <RadzenDataGrid TItem="CustomerBalance" Data="@Visible" IsLoading="@loading" AllowPaging="true" PageSize="20" AllowSorting="true" ShowPagingSummary="true"
+                    Density="Density.Compact" EmptyText="No customers found.">
+        <Columns>
+            <RadzenDataGridColumn Property="Name" Title="Name">
+                <Template>
+                    @if (context.Id == Customer.WalkInId)
+                    {
+                        @context.Name
+                    }
+                    else
+                    {
+                        <RadzenLink Path="@($"ledger/{context.Id}")" Text="@context.Name" title="Open ledger" />
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="Phone" Title="Phone" Width="140px" />
+            <RadzenDataGridColumn Property="Type" Title="Type" Width="110px" />
+            <RadzenDataGridColumn Property="Address" Title="Address" />
+            <RadzenDataGridColumn Property="Balance" Title="Balance" Width="140px" TextAlign="TextAlign.Right">
+                <Template>
+                    <span style="@(context.Balance > 0 ? "color:var(--rz-danger);font-weight:600" : null)">@Money(context.Balance)</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Width="190px" Sortable="false" TextAlign="TextAlign.Right">
+                <Template>
+                    @if (!context.IsActive) { <RadzenBadge BadgeStyle="BadgeStyle.Light" Text="Inactive" class="rz-me-1" /> }
+                    @if (context.Id != Customer.WalkInId)
+                    {
+                        <RadzenButton Icon="menu_book" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Info" Variant="Variant.Outlined" title="Ledger"
+                                      Click="@(() => Nav.NavigateTo($"ledger/{context.Id}"))" />
+                        <RadzenButton Icon="payments" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Success" Variant="Variant.Outlined" title="Receive payment"
+                                      Click="@(() => Nav.NavigateTo($"payments?customer={context.Id}"))" />
+                    }
+                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Edit" Click="@(() => OpenAsync(context.Id))" />
+                    @if (context.Id != Customer.WalkInId)
+                    {
+                        <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private List<CustomerBalance> items = [];
+    private string? search;
+    private bool onlyDue, loading = true;
+    private int loadVersion;
+
+    private IEnumerable<CustomerBalance> Visible => onlyDue ? items.Where(c => c.Balance != 0) : items;
+    private decimal Receivable => items.Where(c => c.Balance > 0).Sum(c => c.Balance);
+    private decimal Advance => -items.Where(c => c.Balance < 0).Sum(c => c.Balance);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var version = ++loadVersion; // ignore results of an older, slower search
+        loading = true;
+        try
+        {
+            var result = await Reports.GetCustomerBalancesAsync(string.IsNullOrWhiteSpace(search) ? null : search.Trim());
+            if (version == loadVersion) items = result;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task OpenAsync(int id)
+    {
+        var result = await Dialogs.OpenAsync<CustomerDialog>(id == 0 ? "Add customer" : "Edit customer",
+            new Dictionary<string, object?> { [nameof(CustomerDialog.CustomerId)] = id },
+            new DialogOptions { Width = "560px" });
+        if (result is int)
+            await LoadAsync();
+    }
+
+    private async Task DeleteAsync(CustomerBalance c)
+    {
+        if (!await ConfirmAsync($"Delete customer \"{c.Name}\"? Customers with invoices or payments can't be deleted.")) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                db.Customers.Remove(new Customer { Id = c.Id });
+                await db.SaveChangesAsync();
+            }, "Deleted"))
+            await LoadAsync();
+    }
+}

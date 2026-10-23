@@ -1,0 +1,37 @@
+@* Heading block for printable reports: shop name (+ phone / address), report title and period.
+   Use like:  <ReportHeader Title="Day Book" From="@from" To="@to" />  (put extra lines inside as child content) *@
+@implements IDisposable
+@inject ShopInfo Shop
+
+<div class="rz-mb-2">
+    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@Shop.Name</RadzenText>
+    @if (!string.IsNullOrEmpty(Shop.Phone) || !string.IsNullOrEmpty(Shop.Address))
+    {
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">@(string.Join(" · ", new[] { Shop.Address, Shop.Phone }.Where(s => !string.IsNullOrEmpty(s))))</RadzenText>
+    }
+    <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0"><strong>@Title</strong></RadzenText>
+    @if (From is DateTime f && To is DateTime t)
+    {
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@(f == t ? Date(f) : $"{Date(f)} to {Date(t)}")</RadzenText>
+    }
+    else if (AsOf is DateTime a)
+    {
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">As of @Date(a)</RadzenText>
+    }
+    @ChildContent
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public DateTime? From { get; set; }
+    [Parameter] public DateTime? To { get; set; }
+    /// <summary>For point-in-time reports (balances) instead of a period.</summary>
+    [Parameter] public DateTime? AsOf { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    protected override void OnInitialized() => Shop.Changed += OnShopChanged;
+
+    private void OnShopChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Shop.Changed -= OnShopChanged;
+}

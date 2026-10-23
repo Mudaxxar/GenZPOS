@@ -1,0 +1,111 @@
+@page "/sales/{Id:int}/receipt"
+@layout PrintLayout
+@attribute [Authorize(Policy = Permissions.SalesView)]
+@inherits PageBase
+@inject SaleService Sales
+@inject AppConfig Config
+@inject ShopInfo Shop
+
+@* Receipt-printer page. The receipt shown here is the preview; printing goes STRAIGHT to this PC's receipt printer
+   (AppConfig.ReceiptPrinter, chosen here once; else the Windows default printer) with GDI drawing
+   (Services/ReceiptPrinter.cs, the owner's PrintDocument approach) — no browser print dialog, so the roll printer feeds
+   exactly the receipt. Owner: NEVER prints by itself — pick / check the printer, then press Print (F9).
+   ?w=58 = 58 mm roll (default 80 mm). *@
+<div class="receipt-tools no-print">
+    <RadzenButton Text="Back to invoice" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo($"sales/{Id}"))" />
+    <RadzenDropDown TValue="string" Data="@printers" @bind-Value="printer" @bind-Value:after="PrinterChanged"
+                    Placeholder="Choose receipt printer" Style="width:220px" title="This PC's receipt printer (remembered)" />
+    <RadzenButton Text="Print  (F9)" Icon="print" IsBusy="@printing" Click="PrintAsync" Disabled="@(sale is null || printer is null)"
+                  data-hotkey="F9" />
+    <RadzenButton Visible="@Can(Permissions.SalesCreate)" Text="New sale  (F2)" Icon="point_of_sale" ButtonStyle="ButtonStyle.Secondary"
+                  Click="@(() => Nav.NavigateTo("sales/new"))" data-hotkey="F2" />
+</div>
+@if (message is not null)
+{
+    <div class="receipt-message no-print @(messageIsError ? "error" : null)">@message</div>
+}
+
+@if (sale is not null)
+{
+    <SaleReceipt Sale="@sale" PreviousBalance="@previousBalance" Width58="@(Width == 58)" />
+}
+else if (error is not null)
+{
+    <div class="receipt-message error">@error</div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [SupplyParameterFromQuery(Name = "w")] public int Width { get; set; }
+
+    private Sale? sale;
+    private decimal previousBalance;
+    private string? error, message, printer;
+    private bool messageIsError, printing;
+    private IReadOnlyList<string> printers = [];
+
+    /// <summary>Paper width: 80 or 58 mm roll.</summary>
+    private int PaperMm => Width == 58 ? 58 : 80;
+
+    protected override void OnInitialized()
+    {
+        printers = ReceiptPrinter.InstalledPrinters();
+        // This PC's chosen receipt printer, else the Windows default printer (as the owner's earlier app did).
+        printer = printers.FirstOrDefault(p => string.Equals(p, Config.ReceiptPrinter, StringComparison.OrdinalIgnoreCase))
+                  ?? printers.FirstOrDefault(p => string.Equals(p, ReceiptPrinter.DefaultPrinter(), StringComparison.OrdinalIgnoreCase));
+        if (printer is null)
+            Show("Choose the receipt printer above, then press Print. It is remembered on this PC.", isError: true);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        try
+        {
+            sale = await Sales.GetAsync(Id);
+            if (sale is null) error = $"Invoice #{Id} was not found.";
+            else if (sale.CustomerId != Customer.WalkInId) previousBalance = await Sales.GetBalanceBeforeAsync(sale);
+        }
+        catch (Exception ex)
+        {
+            error = FriendlyMessage(ex);
+        }
+    }
+
+    /// <summary>Remembers the chosen receipt printer for this PC (appsettings.json).</summary>
+    private void PrinterChanged()
+    {
+        Config.ReceiptPrinter = printer;
+        try { Config.Save(); }
+        catch (Exception ex) { AppLog.Warn("Could not save the receipt printer to appsettings.json", ex); }
+    }
+
+    private async Task PrintAsync()
+    {
+        if (sale is null || printer is null || printing) return;
+        printing = true;
+        message = null;
+        StateHasChanged();
+        try
+        {
+            // GDI printing off the UI thread so the screen never freezes while the printer driver works.
+            var s = sale;
+            var problem = await Task.Run(() => ReceiptPrinter.Print(s, previousBalance, Shop, printer, PaperMm));
+            if (problem is null) Show($"Receipt #{sale.Id} sent to {printer}.", isError: false);
+            else Show(problem, isError: true);
+        }
+        catch (Exception ex)
+        {
+            Show(FriendlyMessage(ex), isError: true);
+        }
+        finally
+        {
+            printing = false;
+        }
+    }
+
+    private void Show(string text, bool isError)
+    {
+        message = text;
+        messageIsError = isError;
+    }
+}

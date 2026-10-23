@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- Versioned Windows TFM: BlazorWebView's WebView2 composition control needs Microsoft.Windows.SDK.NET. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <!-- Files / exe / folders are "GenZ-POS"; C# namespaces can't contain "-", so code uses GenZPOS. -->
+    <AssemblyName>GenZ-POS</AssemblyName>
+    <RootNamespace>GenZPOS</RootNamespace>
+    <!-- .exe icon (Explorer, pinned taskbar, Start menu). Regenerate with tools/make-icon.ps1. -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <AssemblyTitle>GenZ-POS</AssemblyTitle>
+    <Product>GenZ-POS</Product>
+
+    <!-- Shown in the window title / Settings page. Bump for every release given to the shop. -->
+    <Version>1.0.0</Version>
+    <!-- Keep "1.0.0" clean (no "+commit-hash" suffix). -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- Only English resources: avoids dozens of de/fr/ja/... satellite folders in the published app. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Window / taskbar icon while running. -->
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
+    <PackageReference Include="Dapper" Version="2.1.89" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.13" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" Version="10.0.110" />
+    <!-- Pinned newer than the transitive versions: WebView2CompositionControl stability fixes
+         (app was fail-fast crashing in CoreMessaging.dll, 0xc0000602, with SDK 1.0.3179). -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView" Version="10.0.13" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.13">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Identity.Core" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+    <!-- Dev tooling only (dotnet ef migrations); PrivateAssets=all keeps it out of consumers. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.13">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.13" />
+    <PackageReference Include="Radzen.Blazor" Version="12.1.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Build output only (dev runs). On publish the static-web-assets pipeline removes wwwroot Content items
+         and publishes them itself (plus _content/Radzen.Blazor, _framework/blazor.webview.js, GenZ-POS.styles.css),
+         so this does not create duplicate publish items. -->
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Per-shop settings (connection string, backup folder). Read from next to GenZ-POS.exe. -->
+    <!-- The Web/Razor SDK already includes *.json as Content; just make sure it's copied to build + publish output. -->
+    <Content Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,246 @@
+@page "/purchases"
+@attribute [Authorize(Policy = Permissions.PurchasesManage)]
+@inherits PageBase
+@inject PurchaseService Purchases
+@inject ProductExcelService Excel
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Purchases</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Supplier ledger" Icon="menu_book" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo(supplierId is int s ? $"supplier-ledger/{s}" : "supplier-ledger"))" />
+        <RadzenButton Text="Pay supplier" Icon="payments" ButtonStyle="ButtonStyle.Secondary" Click="@(() => Nav.NavigateTo("supplier-payments"))" />
+        <RadzenButton Text="Import stock from Excel" Icon="upload_file" ButtonStyle="ButtonStyle.Light" Click="ImportAsync"
+                      title="Excel file (Products layout, one row per piece) → new items + one purchase bill from a supplier" />
+        <RadzenButton Text="New purchase" Icon="add_shopping_cart" Click="@(() => Nav.NavigateTo("purchases/new"))" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" />
+        <RadzenFormField Text="Supplier" Style="width:220px">
+            <RadzenDropDown TValue="int?" @bind-Value="supplierId" @bind-Value:after="ReloadAsync" Data="@suppliers" TextProperty="Name" ValueProperty="Id"
+                            AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="All suppliers" />
+        </RadzenFormField>
+        <RadzenFormField Text="Payment" Style="width:170px">
+            <RadzenDropDown TValue="PayStatusFilter" @bind-Value="status" @bind-Value:after="ReloadAsync" Data="@statusOptions" TextProperty="Text" ValueProperty="Value" />
+        </RadzenFormField>
+        <RadzenFormField Text="Bill # or purchase #" Style="flex:1; min-width:180px">
+            <RadzenTextBox @bind-Value="search" @bind-Value:after="ReloadAsync" />
+        </RadzenFormField>
+    </RadzenStack>
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Bills: <strong>@count</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Total: <strong>@Money(sumTotal)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Paid on bills: <strong>@Money(sumPaid)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Pending on these bills:
+            <strong style="@(sumTotal - sumPaid > 0 ? "color:var(--rz-danger)" : null)">@Money(sumTotal - sumPaid)</strong>
+        </RadzenText>
+    </RadzenStack>
+
+    <RadzenDataGrid @ref="grid" TItem="Purchase" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                    AllowPaging="true" PageSize="20" ShowPagingSummary="true" Density="Density.Compact"
+                    EmptyText="No purchases match these filters."
+                    RowDoubleClick="@(a => Nav.NavigateTo($"purchases/{a.Data!.Id}/edit"))">
+        <Columns>
+            <RadzenDataGridColumn Property="Id" Title="#" Width="70px" />
+            <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.PurchaseDate)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Supplier"><Template>@context.Supplier?.Name</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="BillNo" Title="Bill #" Width="120px" />
+            <RadzenDataGridColumn Title="Total" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Total)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Paid" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Paid)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Pending" Width="125px" TextAlign="TextAlign.Right">
+                <Template><span style="@(context.Total > context.Paid ? "color:var(--rz-danger)" : null)">@Money(context.Total - context.Paid)</span></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Status" Width="100px" TextAlign="TextAlign.Center">
+                <Template><PayStatusBadge Total="@context.Total" Paid="@context.Paid" /></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Width="250px" TextAlign="TextAlign.Right">
+                <Template>
+                    <RadzenButton Icon="visibility" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="View" Click="@(() => ShowAsync(context))" />
+                    <RadzenButton Icon="table_view" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Export to Excel" Click="@(() => ExportAsync(context.Id))" />
+                    <RadzenButton Icon="label" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Print barcode labels" Click="@(() => Nav.NavigateTo($"purchases/{context.Id}/labels"))" />
+                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Edit" Click="@(() => Nav.NavigateTo($"purchases/{context.Id}/edit"))" />
+                    <RadzenButton Visible="@Can(Permissions.PurchaseReturnsManage)" Icon="assignment_return" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Return to supplier" Click="@(() => Nav.NavigateTo($"purchases/{context.Id}/return"))" />
+                    <RadzenButton Visible="@Can(Permissions.PurchasesDelete)" Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private record StatusOption(PayStatusFilter Value, string Text);
+
+    private static readonly StatusOption[] statusOptions =
+    [
+        new(PayStatusFilter.All, "All"),
+        new(PayStatusFilter.Pending, "Pending payment"),
+        new(PayStatusFilter.Partial, "Partly paid"),
+        new(PayStatusFilter.Unpaid, "Not paid at all"),
+        new(PayStatusFilter.Paid, "Fully paid"),
+    ];
+
+    private RadzenDataGrid<Purchase> grid = default!;
+    private List<Purchase>? rows; // null until first load → Radzen calls LoadData right after first render
+    private List<Supplier> suppliers = [];
+    private int count, loadVersion;
+    private bool loading = true;
+    private decimal sumTotal, sumPaid;
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+    private int? supplierId;
+    private PayStatusFilter status = PayStatusFilter.All;
+    private string? search;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        suppliers = await db.Suppliers.AsNoTracking().OrderBy(s => s.Name).ToListAsync();
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            await LoadPageAsync(args, version);
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task LoadPageAsync(LoadDataArgs args, int version)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var end = to.Date.AddDays(1);
+        var q = db.Purchases.AsNoTracking().Where(p => p.PurchaseDate >= from.Date && p.PurchaseDate < end);
+        if (supplierId is not null) q = q.Where(p => p.SupplierId == supplierId);
+        q = status switch
+        {
+            PayStatusFilter.Pending => q.Where(p => p.Total > p.Paid),
+            PayStatusFilter.Partial => q.Where(p => p.Paid > 0 && p.Total > p.Paid),
+            PayStatusFilter.Unpaid => q.Where(p => p.Paid == 0 && p.Total > 0),
+            PayStatusFilter.Paid => q.Where(p => p.Total <= p.Paid),
+            _ => q,
+        };
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            q = int.TryParse(s, out var no) ? q.Where(p => p.Id == no || p.BillNo == s) : q.Where(p => p.BillNo != null && p.BillNo.Contains(s));
+        }
+
+        var totals = await q.GroupBy(_ => 1)
+            .Select(g => new { Count = g.Count(), Total = g.Sum(x => x.Total), Paid = g.Sum(x => x.Paid) })
+            .FirstOrDefaultAsync();
+        var page = await q.Include(p => p.Supplier).OrderByDescending(p => p.PurchaseDate).ThenByDescending(p => p.Id)
+            .Skip(args.Skip ?? 0).Take(args.Top ?? 20).ToListAsync();
+
+        if (version != loadVersion) return;
+        count = totals?.Count ?? 0;
+        sumTotal = totals?.Total ?? 0;
+        sumPaid = totals?.Paid ?? 0;
+        rows = page;
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task ShowAsync(Purchase p)
+    {
+        Purchase? loaded = null;
+        List<PurchaseReturn> returns = [];
+        if (!await RunAsync(async () =>
+            {
+                loaded = await Purchases.GetAsync(p.Id);
+                if (loaded is not null) returns = await Purchases.GetReturnsAsync(p.Id);
+            }) || loaded is null) return;
+        Purchase full = loaded;
+
+        await Dialogs.OpenAsync($"Purchase #{p.Id} — {full.Supplier?.Name}", _ =>
+            @<RadzenStack Gap="0.5rem">
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@Date(full.PurchaseDate) @(full.BillNo is null ? "" : $"· Bill # {full.BillNo}")</RadzenText>
+                    <PayStatusBadge Total="@full.Total" Paid="@full.Paid" />
+                </RadzenStack>
+                <RadzenDataGrid TItem="PurchaseLine" Data="@full.Lines" Density="Density.Compact">
+                    <Columns>
+                        <RadzenDataGridColumn Title="Item"><Template Context="l">@l.StockItem?.DisplayName</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Qty" Width="80px" TextAlign="TextAlign.Right"><Template Context="l">@Qty(l.Qty)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Cost" Width="110px" TextAlign="TextAlign.Right"><Template Context="l">@Money(l.Cost)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Amount" Width="120px" TextAlign="TextAlign.Right"><Template Context="l">@Money(l.Amount)</Template></RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+                <RadzenStack Gap="0.25rem" Style="width:280px;margin-left:auto">
+                    <TotalLine Label="Sub total" Value="@Money(full.SubTotal)" />
+                    <TotalLine Label="Discount" Value="@Money(full.Discount)" />
+                    <TotalLine Label="Total" Value="@Money(full.Total)" Strong="true" />
+                    <TotalLine Label="Paid on bill" Value="@Money(full.Paid)" />
+                    <TotalLine Label="Pending" Value="@Money(full.Total - full.Paid)" Danger="@(full.Total > full.Paid)" />
+                    @if (returns.Count > 0)
+                    {
+                        <TotalLine Label="@($"Returned to supplier ({returns.Count})")" Value="@Money(returns.Sum(r => r.Total))" />
+                        <TotalLine Label="Cash received back" Value="@Money(returns.Sum(r => r.Received))" />
+                    }
+                </RadzenStack>
+                @if (returns.Count > 0)
+                {
+                    <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                        Returns: @(string.Join(", ", returns.Select(r => $"#{r.Id} on {Date(r.ReturnDate)} ({Money(r.Total)})"))).
+                        This purchase can't be deleted while it has returns.
+                    </RadzenText>
+                }
+                @if (!string.IsNullOrEmpty(full.Notes)) { <RadzenText TextStyle="TextStyle.Body2">Notes: @full.Notes</RadzenText> }
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
+                    <RadzenButton Visible="@Can(Permissions.PurchaseReturnsManage)" Text="Return to supplier" Icon="assignment_return" ButtonStyle="ButtonStyle.Light" Click="@(() => { Dialogs.Close(); Nav.NavigateTo($"purchases/{p.Id}/return"); })" />
+                    <RadzenButton Text="Export to Excel" Icon="table_view" ButtonStyle="ButtonStyle.Light" Click="@(() => ExportAsync(p.Id))" />
+                    <RadzenButton Text="Labels" Icon="label" ButtonStyle="ButtonStyle.Light" Click="@(() => { Dialogs.Close(); Nav.NavigateTo($"purchases/{p.Id}/labels"); })" />
+                    <RadzenButton Text="Edit" Icon="edit" Click="@(() => { Dialogs.Close(); Nav.NavigateTo($"purchases/{p.Id}/edit"); })" />
+                </RadzenStack>
+            </RadzenStack>,
+            new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = true });
+    }
+
+    /// <summary>The bill's lines to an .xlsx (Products layout + Qty, Amount and a Purchase sheet); offers to open it.</summary>
+    private async Task ExportAsync(int purchaseId)
+    {
+        using var ms = new System.IO.MemoryStream();
+        var name = "";
+        if (!await RunAsync(async () => name = await Excel.ExportPurchaseAsync(purchaseId, ms))) return;
+        var path = await Desktop.PickSaveFileAsync(name, ProductExcelService.FileFilter);
+        if (path is null) return;
+        if (await RunAsync(() => Desktop.WriteFileAsync(path, ms.ToArray()))
+            && await ConfirmAsync($"Saved {System.IO.Path.GetFileName(path)}. Open it in Excel now?"))
+            await RunAsync(() => { Desktop.OpenFile(path); return Task.CompletedTask; });
+    }
+
+    /// <summary>Stock from Excel → one purchase bill (PurchaseImportDialog: supplier, date, preview).</summary>
+    private async Task ImportAsync()
+    {
+        var path = await Desktop.PickOpenFileAsync(ProductExcelService.FileFilter);
+        if (path is null) return;
+        if (await Dialogs.OpenAsync<PurchaseImportDialog>("Import stock from Excel as a purchase",
+                new Dictionary<string, object?> { [nameof(PurchaseImportDialog.FilePath)] = path },
+                new DialogOptions { Width = "1000px" }) is int id)
+        {
+            await grid.Reload();
+            if (await ConfirmAsync($"Purchase #{id} saved. Print its barcode labels now?"))
+                Nav.NavigateTo($"purchases/{id}/labels");
+        }
+    }
+
+    private async Task DeleteAsync(Purchase p)
+    {
+        if (!await ConfirmAsync($"Delete purchase #{p.Id}? Its stock will be removed.")) return;
+        if (await RunAsync(() => Purchases.DeleteAsync(p.Id), "Purchase deleted"))
+            await grid.Reload();
+    }
+}

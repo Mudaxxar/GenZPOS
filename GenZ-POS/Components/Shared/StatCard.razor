@@ -1,0 +1,32 @@
+<RadzenColumn Size="12" SizeSM="6" SizeLG="4" SizeXL="2">
+    <RadzenCard Style="@(Href is null ? "height:100%" : "height:100%;cursor:pointer")" class="@(Href is null ? null : "rz-shadow-2")" @onclick="Open"
+                title="@(Href is null ? null : "Click to open")">
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween">
+            <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0">@Title</RadzenText>
+            <RadzenIcon Icon="@Icon" IconColor="@(Danger ? Colors.Danger : Colors.Primary)" />
+        </RadzenStack>
+        <RadzenText TextStyle="TextStyle.H5" class="rz-my-1" Style="@(Danger ? "color:var(--rz-danger)" : null)">@Value</RadzenText>
+        @if (Note is not null)
+        {
+            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">@Note</RadzenText>
+        }
+    </RadzenCard>
+</RadzenColumn>
+
+@code {
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+    [Parameter] public string? Note { get; set; }
+    [Parameter] public string Icon { get; set; } = "info";
+    [Parameter] public string? Href { get; set; }
+    /// <summary>Show the value (and icon) in the danger colour, e.g. items out of stock.</summary>
+    [Parameter] public bool Danger { get; set; }
+
+    private void Open()
+    {
+        if (Href is not null)
+            Nav.NavigateTo(Href);
+    }
+}

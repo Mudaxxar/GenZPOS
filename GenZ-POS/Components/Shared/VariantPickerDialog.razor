@@ -1,0 +1,92 @@
+@inject DialogService Dialogs
+
+@* Pick one size / colour of an article (several products share the scanned or typed Article No).
+   Rows = colours, columns = sizes; each cell shows stock and price. Closes with the chosen ProductLookup, or null. *@
+<RadzenStack Gap="0.75rem">
+    @if (Variants.Select(v => v.Company + "\u001f" + v.Name).Distinct().Count() > 1)
+    {
+        @* Same article no. on different items: list them instead of a grid. *@
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">These items share article no. @ArticleNo:</RadzenText>
+        <div class="variant-list">
+            @foreach (var v in Variants)
+            {
+                <button type="button" class="variant-cell @(v.OnHand <= 0 ? "out" : null)" @onclick="@(() => Dialogs.Close(v))">
+                    <span class="variant-name">@v.DisplayName</span>
+                    <span class="variant-meta">@Qty(v.OnHand) in stock · @Money(v.SalePrice)</span>
+                </button>
+            }
+        </div>
+    }
+    else
+    {
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">Pick the colour and size. Grey = out of stock.</RadzenText>
+        <div class="variant-grid-wrap">
+            <table class="variant-pick">
+                <thead>
+                    <tr>
+                        <th></th>
+                        @foreach (var size in sizes)
+                        {
+                            <th>@(size ?? "—")</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var colour in colours)
+                    {
+                        <tr>
+                            <th>@(colour ?? "—")</th>
+                            @foreach (var size in sizes)
+                            {
+                                var v = Find(colour, size);
+                                var cellStock = Stock(colour, size);
+                                <td>
+                                    @if (v is not null)
+                                    {
+                                        <button type="button" class="variant-cell @(cellStock <= 0 ? "out" : null)" title="@v.DisplayName"
+                                                @onclick="@(() => Dialogs.Close(v))">
+                                            <span class="variant-qty">@Qty(cellStock)</span>
+                                            <span class="variant-meta">@Money(v.SalePrice)</span>
+                                        </button>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(null))" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<ProductLookup> Variants { get; set; } = [];
+    [Parameter] public string? ArticleNo { get; set; }
+
+    private List<string?> colours = [];
+    private List<string?> sizes = [];
+
+    protected override void OnParametersSet()
+    {
+        colours = Variants.Select(v => v.Colour?.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var sorted = StockItemService.SortSizes(Variants.Select(v => v.Size));
+        sizes = [.. sorted];
+        if (Variants.Any(v => string.IsNullOrWhiteSpace(v.Size))) sizes.Add(null);
+    }
+
+    // One barcode per piece: a colour + size can have several stock items. The cell shows their total stock and picks
+    // one that is still in stock (else the first).
+    private IEnumerable<ProductLookup> Cell(string? colour, string? size) =>
+        Variants.Where(v => Same(v.Colour, colour) && Same(v.Size, size));
+
+    private ProductLookup? Find(string? colour, string? size) =>
+        Cell(colour, size).OrderByDescending(v => v.OnHand > 0).ThenBy(v => v.Id).FirstOrDefault();
+
+    private decimal Stock(string? colour, string? size) => Cell(colour, size).Sum(v => v.OnHand);
+
+    private static bool Same(string? a, string? b) =>
+        string.Equals(a?.Trim() ?? "", b?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
+}

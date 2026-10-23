@@ -1,0 +1,7 @@
+@inherits LayoutComponentBase
+
+@* Bare layout for documents printed on their own (receipt roll): no header, menu or containers, so the printed
+   document is exactly the page content — one sheet on a receipt printer (wwwroot/css/app.css ".print-page"). *@
+<div class="print-page">
+    @Body
+</div>

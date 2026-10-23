@@ -1,0 +1,16 @@
+/* The grey desk the label lies on; takes keyboard focus for arrow-key nudging. */
+.designer-surface {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 18px;
+    background: var(--rz-base-200, #eee);
+    border-radius: 6px;
+    min-height: 200px;
+    outline: none;
+    touch-action: none;
+}
+
+.designer-surface:focus-visible {
+    box-shadow: 0 0 0 2px var(--rz-primary-lighter, #c5cae9) inset;
+}

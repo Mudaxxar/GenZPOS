@@ -1,0 +1,67 @@
+.variant-grid-wrap {
+    overflow: auto;
+    max-height: 60vh;
+}
+
+.variant-pick {
+    border-collapse: collapse;
+}
+
+.variant-pick th,
+.variant-pick td {
+    border: 1px solid var(--rz-base-300);
+    padding: 4px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.variant-pick th {
+    background: var(--rz-base-100);
+    font-weight: 600;
+    padding: 6px 10px;
+}
+
+.variant-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 100%;
+    min-width: 76px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: none;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+}
+
+.variant-cell:hover,
+.variant-cell:focus-visible {
+    border-color: var(--rz-primary);
+    background: var(--rz-primary-lighter);
+}
+
+.variant-cell.out {
+    opacity: 0.45;
+}
+
+.variant-qty {
+    font-weight: 600;
+}
+
+.variant-meta {
+    font-size: 0.75rem;
+    opacity: 0.75;
+}
+
+.variant-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.variant-list .variant-cell {
+    align-items: flex-start;
+}

@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+dist/
+*_wpftmp.csproj
+
+# IDE / user files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.rsuser
+
+# Test results / logs
+TestResults/
+*.log
+
+# Claude Code local settings
+.claude/settings.local.json

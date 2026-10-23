@@ -1,0 +1,140 @@
+@page "/sale-returns"
+@attribute [Authorize(Policy = Permissions.SaleReturnsManage)]
+@inherits PageBase
+@inject SaleReturnService SaleReturns
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Sales Returns</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.Center">
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">A return starts from its invoice.</RadzenText>
+        <RadzenButton Visible="@Can(Permissions.SalesView)" Text="New return (pick invoice)" Icon="assignment_return" Click="@(() => Nav.NavigateTo("sales"))" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" />
+        <RadzenFormField Text="Customer" Style="width:240px">
+            <RadzenDropDown TValue="int?" @bind-Value="customerId" @bind-Value:after="ReloadAsync" Data="@customers" TextProperty="Label" ValueProperty="Id"
+                            AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="All customers" />
+        </RadzenFormField>
+        <RadzenFormField Text="Return # or invoice #" Style="flex:1; min-width:180px">
+            <RadzenTextBox @bind-Value="search" @bind-Value:after="ReloadAsync" MaxLength="20" />
+        </RadzenFormField>
+    </RadzenStack>
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Returns: <strong>@count</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Total returned: <strong>@Money(sumTotal)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Cash refunded: <strong>@Money(sumRefunded)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Credited to balances: <strong>@Money(sumTotal - sumRefunded)</strong></RadzenText>
+    </RadzenStack>
+
+    <RadzenDataGrid @ref="grid" TItem="SaleReturn" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                    AllowPaging="true" PageSize="20" ShowPagingSummary="true" Density="Density.Compact"
+                    EmptyText="No returns match these filters."
+                    RowDoubleClick="@(a => Nav.NavigateTo($"sale-returns/{a.Data!.Id}"))">
+        <Columns>
+            <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.ReturnDate)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="Id" Title="Return #" Width="95px" />
+            <RadzenDataGridColumn Title="Invoice #" Width="95px">
+                <Template>
+                    @if (context.SaleId is int sid)
+                    {
+                        <RadzenLink Path="@($"sales/{sid}")" Text="@sid.ToString()" />
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Customer"><Template>@context.Customer?.Name</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Total" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Total)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Refunded" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Refunded)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="To balance" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Total - context.Refunded)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Width="100px" TextAlign="TextAlign.Right">
+                <Template>
+                    <RadzenButton Icon="visibility" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="View" Click="@(() => Nav.NavigateTo($"sale-returns/{context.Id}"))" />
+                    <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private record CustomerOption(int Id, string Label);
+
+    private RadzenDataGrid<SaleReturn> grid = default!;
+    private List<SaleReturn>? rows; // null until first load → Radzen calls LoadData right after first render
+    private List<CustomerOption> customers = [];
+    private int count, loadVersion;
+    private bool loading = true;
+    private decimal sumTotal, sumRefunded;
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+    private int? customerId;
+    private string? search;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            customers = await db.Customers.AsNoTracking()
+                .OrderBy(c => c.Id == Customer.WalkInId ? 0 : 1).ThenBy(c => c.Name)
+                .Select(c => new CustomerOption(c.Id, c.Phone == null ? c.Name : c.Name + " (" + c.Phone + ")"))
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            await LoadPageAsync(args, version);
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task LoadPageAsync(LoadDataArgs args, int version)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var end = to.Date.AddDays(1);
+        var q = db.SaleReturns.AsNoTracking().Where(r => r.ReturnDate >= from.Date && r.ReturnDate < end);
+        if (customerId is not null) q = q.Where(r => r.CustomerId == customerId);
+        if (!string.IsNullOrWhiteSpace(search) && int.TryParse(search.Trim(), out var no))
+            q = q.Where(r => r.Id == no || r.SaleId == no);
+
+        var totals = await q.GroupBy(_ => 1)
+            .Select(g => new { Count = g.Count(), Total = g.Sum(x => x.Total), Refunded = g.Sum(x => x.Refunded) })
+            .FirstOrDefaultAsync();
+        var page = await q.Include(r => r.Customer).OrderByDescending(r => r.ReturnDate).ThenByDescending(r => r.Id)
+            .Skip(args.Skip ?? 0).Take(args.Top ?? 20).ToListAsync();
+
+        if (version != loadVersion) return;
+        count = totals?.Count ?? 0;
+        sumTotal = totals?.Total ?? 0;
+        sumRefunded = totals?.Refunded ?? 0;
+        rows = page;
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task DeleteAsync(SaleReturn r)
+    {
+        if (!await ConfirmAsync($"Delete return #{r.Id}? Its stock goes back out and the customer's balance is restored.")) return;
+        if (await RunAsync(() => SaleReturns.DeleteAsync(r.Id), "Return deleted"))
+            await grid.Reload();
+    }
+}

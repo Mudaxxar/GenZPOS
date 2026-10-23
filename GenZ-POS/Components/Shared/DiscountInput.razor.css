@@ -1,0 +1,37 @@
+.discount-input {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.discount-input-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.discount-input-note {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 2px 8px;
+    font-size: 0.75rem;
+    opacity: 0.8;
+}
+
+.discount-input-note .over {
+    color: var(--rz-danger);
+    font-weight: 600;
+    opacity: 1;
+}
+
+.use-max {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--rz-primary);
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+}

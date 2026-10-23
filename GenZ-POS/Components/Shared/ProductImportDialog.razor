@@ -1,0 +1,173 @@
+@inherits PageBase
+@inject ProductExcelService Excel
+@inject DesktopService Desktop
+
+@* Preview of a product import from Excel. Nothing is saved until "Import" is pressed; closes with true after an import. *@
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0"><RadzenIcon Icon="description" /> @System.IO.Path.GetFileName(FilePath)</RadzenText>
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenCheckBox Name="CreateMissing" @bind-Value="createMissing" @bind-Value:after="PreviewAsync" Disabled="@(loading || Busy)" />
+            <RadzenLabel Text="Create missing companies and sub-categories" Component="CreateMissing" />
+            <RadzenButton Icon="refresh" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Read the file again (after saving it in Excel)"
+                          Click="PreviewAsync" Disabled="@(loading || Busy)" />
+        </RadzenStack>
+    </RadzenStack>
+
+    @if (loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    }
+    else if (error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">@error</RadzenAlert>
+    }
+    else if (plan is not null)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+            <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"{plan.AddCount} new")" />
+            <RadzenBadge BadgeStyle="BadgeStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"{plan.UpdateCount} changed")" />
+            <RadzenBadge BadgeStyle="BadgeStyle.Light" Variant="Variant.Flat" Text="@($"{plan.UnchangedCount} unchanged")" />
+            @if (plan.OpeningCount > 0)
+            {
+                <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Text="@($"+{Qty(plan.OpeningTotal)} opening stock on {plan.OpeningCount} product(s)")" />
+            }
+            @if (plan.Errors.Count > 0)
+            {
+                <RadzenBadge BadgeStyle="BadgeStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"{plan.Errors.Count} with errors")" />
+            }
+        </RadzenStack>
+
+        @if (plan.OpeningSkipped.Count > 0)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0"
+                         Title="@($"Opening stock skipped on {plan.OpeningSkipped.Count} product(s) that already have stock")">
+                Their other changes are still imported. Bring extra stock in with a purchase or Stock In / Out, so it is never counted twice.
+                <ul class="rz-mb-0 rz-mt-1">
+                    @foreach (var s in plan.OpeningSkipped.Take(8))
+                    {
+                        <li>Row @s.Row — @s.Message</li>
+                    }
+                    @if (plan.OpeningSkipped.Count > 8) { <li>… and @(plan.OpeningSkipped.Count - 8) more</li> }
+                </ul>
+            </RadzenAlert>
+        }
+
+        @if (plan.Errors.Count > 0)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0"
+                         Title="Nothing will be imported until these rows are fixed">
+                Fix them in Excel, save the file, then press the refresh button above.
+            </RadzenAlert>
+            <RadzenDataGrid TItem="ProductImportIssue" Data="@plan.Errors" Density="Density.Compact" AllowPaging="true" PageSize="8">
+                <Columns>
+                    <RadzenDataGridColumn Property="Row" Title="Excel row" Width="90px" />
+                    <RadzenDataGridColumn Property="Message" Title="Problem" />
+                </Columns>
+            </RadzenDataGrid>
+        }
+
+        @if (plan.NewCompanies.Count > 0 || plan.NewSubCategories.Count > 0)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">
+                @if (plan.NewCompanies.Count > 0) { <div>New companies: <strong>@string.Join(", ", plan.NewCompanies)</strong></div> }
+                @if (plan.NewSubCategories.Count > 0) { <div>New sub-categories: <strong>@string.Join(", ", plan.NewSubCategories)</strong></div> }
+            </RadzenAlert>
+        }
+
+        @if (changes.Count > 0)
+        {
+            <RadzenDataGrid TItem="ProductImportLine" Data="@changes" Density="Density.Compact" AllowPaging="true" PageSize="10" ShowPagingSummary="true">
+                <Columns>
+                    <RadzenDataGridColumn Title="Row" Width="60px"><Template>@context.Source.Row</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="" Width="85px">
+                        <Template>
+                            @if (context.Action == ProductImportAction.Add)
+                            {
+                                <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Shade="Shade.Lighter" Text="New" />
+                            }
+                            else
+                            {
+                                <RadzenBadge BadgeStyle="BadgeStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" Text="Change" />
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Product">
+                        <Template>@string.Join(" · ", new[] { context.Source.Company, context.Source.Name, context.Source.Shade, context.Source.PackSize, context.Source.Size }.Where(s => !string.IsNullOrEmpty(s)))</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="What changes">
+                        <Template>
+                            @if (context.Action == ProductImportAction.Add)
+                            {
+                                <span>@($"{context.Source.Category} › {context.Source.SubCategory}; price {context.Source.SalePrice ?? 0:N2}" +
+                                         (context.OpeningQty > 0 ? $"; opening stock {context.OpeningQty:0.##}" : ""))</span>
+                            }
+                            else
+                            {
+                                <span style="white-space:normal">@context.Changes</span>
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        }
+        else if (plan.Errors.Count == 0)
+        {
+            <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Every product in the file is already the same in GenZ-POS. Nothing to import.</RadzenText>
+        }
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(false))" />
+        <RadzenButton Text="@ImportText" Icon="upload" IsBusy="Busy" Disabled="@(loading || plan?.CanImport != true)" Click="ImportAsync" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public string FilePath { get; set; } = "";
+
+    private ProductImportPlan? plan;
+    private List<ProductImportLine> changes = [];
+    private bool createMissing = true, loading = true;
+    private string? error;
+
+    private string ImportText => plan is { CanImport: true }
+        ? $"Import {plan.AddCount + plan.UpdateCount} product(s)"
+        : "Import";
+
+    protected override Task OnInitializedAsync() => PreviewAsync();
+
+    private async Task PreviewAsync()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            await using var file = await Desktop.ReadFileAsync(FilePath);
+            plan = await Excel.PreviewAsync(file, createMissing);
+            changes = plan.Lines.Where(l => l.Action != ProductImportAction.Unchanged).ToList();
+        }
+        catch (Exception ex)
+        {
+            plan = null;
+            changes = [];
+            error = FriendlyMessage(ex);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task ImportAsync()
+    {
+        if (plan is null) return;
+        (int Added, int Updated) result = default;
+        if (await RunAsync(async () => result = await Excel.ImportAsync(plan)))
+        {
+            Toast(NotificationSeverity.Success, $"Import done: {result.Added} added, {result.Updated} changed" +
+                (plan.OpeningCount > 0 ? $", opening stock {Qty(plan.OpeningTotal)} added to {plan.OpeningCount} product(s)." : "."), 6000);
+            Dialogs.Close(true);
+        }
+    }
+}

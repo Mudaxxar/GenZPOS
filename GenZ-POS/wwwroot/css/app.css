@@ -1,0 +1,460 @@
+html, body {
+    margin: 0;
+    height: 100%;
+}
+
+.money {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Sale screen product picker rows (the dropdown popup renders outside the page's CSS scope) ---- */
+.pick-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+}
+
+.pick-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pick-meta {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+    font-size: .85em;
+}
+
+.pick-stock {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--rz-success-lighter, #e6f4ea);
+    color: var(--rz-success-darker, #1e6b34);
+}
+
+.pick-stock.out {
+    background: var(--rz-danger-lighter, #fdecea);
+    color: var(--rz-danger-darker, #a3261b);
+}
+
+.pick-price {
+    font-weight: 600;
+    min-width: 90px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+#blazor-error-ui {
+    background: lightyellow;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 0.75rem;
+    top: 0.5rem;
+}
+
+/* ---- Printable invoice (Pages/SaleView.razor) ---- */
+.invoice-muted {
+    opacity: .7;
+}
+
+.invoice-logo {
+    max-width: 160px;
+    max-height: 90px;
+    object-fit: contain;
+}
+
+.invoice-rule {
+    border: 0;
+    border-top: 1px solid var(--rz-base-300, #ccc);
+    margin: .75rem 0;
+    width: 100%;
+}
+
+.invoice-customer > div {
+    margin: .1rem 0;
+}
+
+.invoice-lines {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.invoice-lines th,
+.invoice-lines td {
+    padding: .35rem .5rem;
+    border-bottom: 1px solid var(--rz-base-200, #e5e5e5);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.invoice-lines th {
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid var(--rz-base-400, #999);
+    background: var(--rz-base-100, #f5f5f5);
+}
+
+.invoice-lines th.money {
+    text-align: right;
+}
+
+.invoice-totals {
+    width: 300px;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+}
+
+.invoice-foot {
+    margin-top: 1.5rem;
+    text-align: center;
+    font-size: .85em;
+}
+
+/* ---- Stock report (Pages/StockReport.razor): grouped by article in code, so no "drag a column" panel / chip
+   (removing it would ungroup); sold pieces greyed. Global because scoped CSS can't reach inside RadzenDataGrid. ---- */
+.stock-grid .rz-group-header {
+    display: none;
+}
+
+.stock-grid .sold-row > td {
+    opacity: 0.5;
+}
+
+/* Labels screen (Pages/PurchaseLabels.razor): the row shown in the preview. */
+.label-row-selected > td {
+    background: var(--rz-primary-lighter, #e8eaf6) !important;
+}
+
+/* ---- Thermal receipt (Shared/SaleReceipt.razor): 80 mm roll = 72 mm printable, 58 mm roll = 48 mm ----
+   Pure black on white (thermal printers can't do grey well), dashed rules like a till slip. */
+.sale-docs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.receipt-preview {
+    flex: 0 0 auto;
+}
+
+.receipt-preview-label {
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    opacity: .6;
+    margin: 0 0 .35rem .25rem;
+}
+
+.receipt {
+    width: 72mm;
+    box-sizing: border-box;
+    padding: 4mm 3mm 6mm;
+    background: #fff;
+    color: #000;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 9.5pt;
+    line-height: 1.3;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, .15);
+    border-radius: 2px;
+}
+
+.receipt.receipt-58 {
+    width: 48mm;
+    padding: 3mm 1.5mm 5mm;
+    font-size: 8pt;
+}
+
+.receipt .r-shop {
+    text-align: center;
+    font-size: 1.55em;
+    font-weight: 700;
+    letter-spacing: .02em;
+    line-height: 1.15;
+    margin-bottom: 1mm;
+}
+
+/* Same size as printed (ReceiptPrinter.DrawLogo): ~46 mm wide (33 mm on 58 mm), at most 28 mm high. */
+.receipt .r-logo {
+    display: block;
+    margin: 0 auto 1mm;
+    max-width: 46mm;
+    max-height: 28mm;
+}
+
+.receipt.receipt-58 .r-logo { max-width: 33mm; }
+
+.receipt .r-center { text-align: center; }
+.receipt .r-right { text-align: right; }
+.receipt .r-small { font-size: .85em; }
+.receipt .r-contact { font-size: .92em; }
+.receipt .r-tiny { font-size: .75em; margin-top: 2mm; letter-spacing: .1em; }
+
+.receipt .r-title {
+    margin: 3mm 0 2mm;
+    padding: 1mm 0;
+    text-align: center;
+    font-weight: 700;
+    letter-spacing: .25em;
+    border-top: 1.5px solid #000;
+    border-bottom: 1.5px solid #000;
+}
+
+.receipt .r-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 2mm;
+}
+
+.receipt .r-row > :last-child { text-align: right; }
+.receipt .r-strong { font-weight: 700; }
+
+.receipt .r-rule {
+    border-top: 1px dashed #000;
+    margin: 2mm 0;
+}
+
+.receipt .r-rule-thin {
+    border-top: 1px dotted #000;
+    margin: 1.5mm 0;
+}
+
+.receipt .r-item {
+    padding: 1mm 0;
+    break-inside: avoid;
+}
+
+.receipt .r-item + .r-item {
+    border-top: 1px dotted #999;
+}
+
+.receipt .r-item-name { font-weight: 600; }
+.receipt .r-item-sub { font-size: .85em; }
+
+.receipt .r-total {
+    display: flex;
+    justify-content: space-between;
+    margin: 1.5mm 0;
+    padding: 1.5mm 0;
+    font-size: 1.35em;
+    font-weight: 800;
+    border-top: 2px solid #000;
+    border-bottom: 2px solid #000;
+}
+
+.receipt .r-saved {
+    margin-top: 1.5mm;
+    text-align: center;
+    font-weight: 600;
+    font-size: .9em;
+}
+
+.receipt .r-thanks { margin-top: 1mm; }
+
+/* Print: only the invoice. Hide app chrome, buttons (.no-print), toasts and dialogs.
+   No @page rules at all: the A4 invoice uses the print dialog's paper and margins; the receipt is printed from C#
+   with its own exact page size and zero margins (DesktopService.PrintReceiptAsync), which CSS must not override. */
+@media print {
+
+    .rz-header, .rz-sidebar, .rz-footer, .rz-sidebar-toggle,
+    .rz-notification, .rz-notification-item, .rz-dialog-wrapper, .rz-tooltip,
+    #blazor-error-ui, .no-print {
+        display: none !important;
+    }
+
+    html, body {
+        height: auto !important;
+        background: #fff !important;
+        color: #000 !important;
+    }
+
+    .rz-layout, .rz-body, .rz-body > .rz-p-2 {
+        display: block !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        height: auto !important;
+        overflow: visible !important;
+        background: #fff !important;
+        inset: auto !important;
+        position: static !important;
+    }
+
+    .invoice {
+        max-width: none !important;
+        width: 100% !important;
+        box-shadow: none !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        padding: 0 !important;
+        background: #fff !important;
+        color: #000 !important;
+        font-size: 10.5pt;
+    }
+
+    .invoice .rz-text-h5 {
+        font-size: 16pt !important;
+    }
+
+    .invoice .rz-text-h6 {
+        font-size: 12pt !important;
+    }
+
+    .invoice-lines th {
+        background: #eee !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .invoice-lines th, .invoice-lines td {
+        padding: 3pt 4pt;
+        border-color: #999 !important;
+    }
+
+    .invoice-lines tr {
+        break-inside: avoid;
+    }
+
+    .invoice-totals {
+        width: 55%;
+        min-width: 220px;
+        break-inside: avoid;
+    }
+
+    .invoice .rz-badge {
+        border: 1px solid #999;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* The invoice screen prints the A4 invoice only; receipts print from their own page (PrintLayout). */
+    .print-a4 .receipt-preview {
+        display: none !important;
+    }
+
+    .sale-docs {
+        display: block !important;
+    }
+
+    /* Receipt page (Layout/PrintLayout + Pages/SaleReceiptPrint): the document is only the receipt, top-left, nothing
+       around it, so it fills the exact page DesktopService.PrintReceiptAsync gives it. */
+    .print-page {
+        padding: 0 !important;
+        gap: 0 !important;
+        min-height: 0 !important;
+        background: #fff !important;
+    }
+
+    /* index.html gives #app "padding: 2rem" for its "Loading…" text: on paper that is ~8.5 mm above and below the
+       receipt, which pushed its end onto a 2nd sheet. */
+    #app {
+        padding: 0 !important;
+    }
+
+    .print-page .receipt {
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        margin: 0 auto !important;
+    }
+}
+
+.receipt-message {
+    max-width: 480px;
+    text-align: center;
+    padding: .5rem .75rem;
+    border-radius: 6px;
+    background: var(--rz-success-lighter, #e6f4ea);
+    color: var(--rz-success-darker, #1e6b34);
+}
+
+.receipt-message.error {
+    background: var(--rz-danger-lighter, #fdecea);
+    color: var(--rz-danger-darker, #a3261b);
+}
+
+/* Receipt page on screen: the receipt centred on a grey desk, its buttons above. */
+.print-page {
+    min-height: 100%;
+    box-sizing: border-box;
+    padding: 1rem;
+    background: var(--rz-base-200, #eee);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.receipt-tools {
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* ---------- Login / first password screen (Components/Auth) ---------- */
+.auth-screen {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: var(--rz-base-background-color);
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 400px;
+}
+
+.auth-muted,
+.auth-version {
+    opacity: 0.7;
+}
+
+.auth-version {
+    font-size: 0.75rem;
+}
+
+/* ---------- Responsive safety (owner 2026-10-23: "some textboxes are over other fields") ----------
+   A field inside a flex row / grid may shrink to the space it has instead of keeping its input's natural width and
+   spilling over the next field. Fixed widths (Style="width:…") still win; rows that should wrap use Wrap="FlexWrap.Wrap". */
+.rz-stack > .rz-form-field,
+.rz-stack > .rz-stack,
+.rz-form-field,
+.rz-form-field-content {
+    min-width: 0;
+}
+
+.rz-form-field .rz-textbox,
+.rz-form-field .rz-numeric,
+.rz-form-field .rz-dropdown,
+.rz-form-field .rz-autocomplete,
+.rz-form-field input {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* Wide tables scroll sideways inside their card instead of pushing the page wider. */
+.rz-data-grid {
+    max-width: 100%;
+}

@@ -1,0 +1,154 @@
+@page "/reports/receivables"
+@attribute [Authorize(Policy = Permissions.ReportsBalances)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="no-print">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Receivables (customers who owe us)</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Print" Icon="print" ButtonStyle="ButtonStyle.Light" Click="PrintAsync" Disabled="@(items is null)" />
+        <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportAsync" Disabled="@(items is null)" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard class="rz-mb-3 no-print">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+        <RadzenTextBox Placeholder="Search name or phone…" @bind-Value="search" @bind-Value:after="Apply" Style="flex:1; min-width:200px; max-width:360px" />
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+            <RadzenCheckBox Name="WithAdvances" @bind-Value="withAdvances" @bind-Value:after="Apply" />
+            <RadzenLabel Text="Also show advances (customers we owe)" Component="WithAdvances" />
+        </RadzenStack>
+        <RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="LoadAsync" IsBusy="@loading" />
+    </RadzenStack>
+</RadzenCard>
+
+@if (items is null)
+{
+    if (loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    }
+}
+else
+{
+    <RadzenCard>
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem" class="rz-mb-2">
+            <ReportHeader Title="Receivables — customers who owe us" AsOf="@DateTime.Today" />
+            <RadzenStack Gap="0.25rem" Style="width:300px">
+                <TotalLine Label="@($"Total receivable ({items.Count(c => c.Balance > 0)})")" Value="@Money(Receivable)" Strong="true" Danger="@(Receivable > 0)" />
+                <TotalLine Label="@($"Advances held ({items.Count(c => c.Balance < 0)})")" Value="@Money(Advances)" />
+            </RadzenStack>
+        </RadzenStack>
+
+        <RadzenDataGrid TItem="CustomerBalance" Data="@visible" AllowPaging="@(!printAll)" PageSize="50" ShowPagingSummary="true" AllowSorting="true"
+                        Density="Density.Compact" EmptyText="Nobody owes anything. 👍">
+            <Columns>
+                <RadzenDataGridColumn Property="Name" Title="Customer">
+                    <Template><RadzenLink Path="@($"ledger/{context.Id}")" Text="@context.Name" title="Open ledger" /></Template>
+                    <FooterTemplate><strong>Total</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="Phone" Title="Phone" Width="140px" />
+                <RadzenDataGridColumn Property="Balance" Title="Balance" Width="140px" TextAlign="TextAlign.Right">
+                    <Template>
+                        @if (context.Balance < 0)
+                        {
+                            <span title="Advance: we owe this customer">@Money(-context.Balance) adv.</span>
+                        }
+                        else
+                        {
+                            <strong style="color:var(--rz-danger)">@Money(context.Balance)</strong>
+                        }
+                    </Template>
+                    <FooterTemplate><strong>@Money(visible.Sum(c => c.Balance))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="LastSaleDate" Title="Last sale" Width="120px">
+                    <Template>@(context.LastSaleDate is DateTime d ? Date(d) : "")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="LastPaymentDate" Title="Last payment" Width="120px">
+                    <Template>@(context.LastPaymentDate is DateTime d ? Date(d) : "Never")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="DaysSinceLastPayment" Title="Days since payment" Width="110px" TextAlign="TextAlign.Right">
+                    <Template>
+                        <span style="@(context.Balance > 0 && (context.DaysSinceLastPayment ?? int.MaxValue) > 30 ? "color:var(--rz-danger);font-weight:600" : null)">
+                            @(context.DaysSinceLastPayment?.ToString() ?? "—")
+                        </span>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Width="100px" Sortable="false" TextAlign="TextAlign.Right" CssClass="no-print" HeaderCssClass="no-print" FooterCssClass="no-print">
+                    <Template>
+                        <RadzenButton Icon="menu_book" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Info" Variant="Variant.Outlined" title="Ledger"
+                                      Click="@(() => Nav.NavigateTo($"ledger/{context.Id}"))" />
+                        <RadzenButton Icon="payments" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Success" Variant="Variant.Outlined" title="Receive payment"
+                                      Click="@(() => Nav.NavigateTo($"payments?customer={context.Id}"))" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenCard>
+}
+
+@code {
+    private List<CustomerBalance>? items;
+    private string? search;
+    private bool withAdvances, loading, printAll;
+    private int loadVersion;
+
+    private List<CustomerBalance> visible = [];
+
+    /// <summary>Applies search / advances filter and sorts by balance (biggest first).</summary>
+    private void Apply() => visible = (items ?? [])
+        .Where(c => c.Id != Customer.WalkInId && (withAdvances ? c.Balance != 0 : c.Balance > 0))
+        .Where(c => string.IsNullOrWhiteSpace(search)
+                    || c.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
+                    || (c.Phone ?? "").Contains(search.Trim(), StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(c => c.Balance).ThenBy(c => c.Name)
+        .ToList();
+
+    private decimal Receivable => items?.Where(c => c.Balance > 0).Sum(c => c.Balance) ?? 0;
+    private decimal Advances => -(items?.Where(c => c.Balance < 0).Sum(c => c.Balance) ?? 0);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            var result = await Reports.GetCustomerBalancesAsync();
+            if (version != loadVersion) return;
+            items = result;
+            Apply();
+            printAll = false;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        printAll = true; // print every row, not just the current page
+        StateHasChanged();
+        await Task.Delay(150);
+        await Desktop.PrintAsync();
+    }
+
+    private async Task ExportAsync()
+    {
+        var rows = visible;
+        var lines = new List<object?[]> { new object?[] { "Customer", "Phone", "Balance", "Last sale", "Last payment", "Days since payment" } };
+        lines.AddRange(rows.Select(c => new object?[] { c.Name, c.Phone, c.Balance, c.LastSaleDate, c.LastPaymentDate, c.DaysSinceLastPayment }));
+        lines.Add(["Total", null, rows.Sum(c => c.Balance), null, null, null]);
+
+        var path = await Desktop.SaveTextFileAsync($"Receivables {DateTime.Today:yyyy-MM-dd}.csv", "CSV files (*.csv)|*.csv", Csv(lines));
+        if (path is not null)
+            Toast(NotificationSeverity.Success, $"Saved to {path}");
+    }
+}

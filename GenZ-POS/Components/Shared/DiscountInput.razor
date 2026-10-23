@@ -1,0 +1,73 @@
+@* Invoice / bill discount typed in rupees or as % of the sub total (New Sale, New Purchase).
+   The parent keeps Value + IsPercent and works out rupees with DiscountRules.Amount, so a % discount follows the cart.
+   Max (rupees, optional) = the items' maximum discount: shown in Rs and %, red when over, with "use max". *@
+<div class="discount-input">
+    <div class="discount-input-row">
+        <RadzenNumeric TValue="decimal" Value="@Value" ValueChanged="SetValueAsync" Min="0" Max="@(IsPercent ? 100m : null)"
+                       ShowUpDown="false" Format="@(IsPercent ? "0.##" : "N2")" TextAlign="TextAlign.Right"
+                       class="@InputClass" Style="@InputStyle" Placeholder="@(IsPercent ? "%" : "Rs")" />
+        @* Rs / % switch; data-enter-skip so Enter in the amount still moves to the next field. *@
+        <RadzenSelectBar TValue="bool" Value="@IsPercent" ValueChanged="SetModeAsync" Size="ButtonSize.Small" data-enter-skip="true"
+                         title="Discount in rupees or as % of the sub total">
+            <Items>
+                <RadzenSelectBarItem Text="Rs" Value="false" />
+                <RadzenSelectBarItem Text="%" Value="true" />
+            </Items>
+        </RadzenSelectBar>
+    </div>
+    @if (Amount > 0 || Max is not null)
+    {
+        <div class="discount-input-note">
+            @if (Amount > 0)
+            {
+                <span>= @(IsPercent ? Money(Amount) : $"{DiscountRules.ToPercent(SubTotal, Amount):0.##}%")</span>
+            }
+            @if (Max is { } max)
+            {
+                <span class="@(Amount > max ? "over" : null)">
+                    max @Money(max) (@($"{DiscountRules.MaxPercent(SubTotal, max):0.##}%"))
+                </span>
+                @if (Amount != max && max > 0)
+                {
+                    <button type="button" class="use-max" @onclick="UseMaxAsync">use max</button>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>What was typed: rupees, or a % when <see cref="IsPercent"/>.</summary>
+    [Parameter] public decimal Value { get; set; }
+    [Parameter] public EventCallback<decimal> ValueChanged { get; set; }
+
+    [Parameter] public bool IsPercent { get; set; }
+    [Parameter] public EventCallback<bool> IsPercentChanged { get; set; }
+
+    /// <summary>Amount the % is taken of (the invoice / bill sub total).</summary>
+    [Parameter] public decimal SubTotal { get; set; }
+
+    /// <summary>Most discount allowed in rupees; null = no limit (nothing shown).</summary>
+    [Parameter] public decimal? Max { get; set; }
+
+    [Parameter] public string? InputClass { get; set; }
+    [Parameter] public string? InputStyle { get; set; }
+
+    private decimal Amount => DiscountRules.Amount(SubTotal, Value, IsPercent);
+
+    private Task SetValueAsync(decimal value) => ValueChanged.InvokeAsync(Math.Max(0, IsPercent ? Math.Min(value, 100) : value));
+
+    /// <summary>Switching keeps the same discount: Rs 50 on Rs 1,000 becomes 5% and back.</summary>
+    private async Task SetModeAsync(bool percent)
+    {
+        if (percent == IsPercent) return;
+        var amount = Amount;
+        await IsPercentChanged.InvokeAsync(percent);
+        await ValueChanged.InvokeAsync(percent ? DiscountRules.ToPercent(SubTotal, amount) : amount);
+    }
+
+    private Task UseMaxAsync() =>
+        Max is { } max
+            ? ValueChanged.InvokeAsync(IsPercent ? DiscountRules.MaxPercent(SubTotal, max) : max)
+            : Task.CompletedTask;
+}

@@ -1,0 +1,49 @@
+@implements IDisposable
+@inject CurrentUser CurrentUser
+@inject AuthService Auth
+
+@* Nothing of the app is rendered until someone logs in; a new / reset password must be changed first.
+   Each page states its right with [Authorize(Policy = Permissions.X)]; without it the page shows NoAccess. *@
+@if (CurrentUser.Session is not { } session)
+{
+    <LoginScreen />
+}
+else if (session.MustChangePassword)
+{
+    <div class="auth-screen">
+        <RadzenCard class="auth-card">
+            <RadzenStack Gap="1rem">
+                <div>
+                    <RadzenText TextStyle="TextStyle.H5" TagName="TagName.H1" class="rz-m-0">Choose a new password</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0 auth-muted">
+                        Hello @session.DisplayName. Please replace the password you were given with your own.
+                    </RadzenText>
+                </div>
+                <ChangePasswordForm />
+                <RadzenButton Text="Log out" Icon="logout" Variant="Variant.Text" ButtonStyle="ButtonStyle.Light" Click="@Auth.Logout" />
+            </RadzenStack>
+        </RadzenCard>
+    </div>
+}
+else
+{
+    <Router AppAssembly="@typeof(Routes).Assembly">
+        <Found Context="routeData">
+            <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+                <NotAuthorized>
+                    <NoAccess />
+                </NotAuthorized>
+            </AuthorizeRouteView>
+            <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+        </Found>
+    </Router>
+}
+
+@code {
+    protected override void OnInitialized() => CurrentUser.Changed += OnUserChanged;
+
+    // Login / logout can be raised from any component; re-render the whole app.
+    private void OnUserChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => CurrentUser.Changed -= OnUserChanged;
+}

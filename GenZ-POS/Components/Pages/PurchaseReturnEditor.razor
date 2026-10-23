@@ -1,0 +1,185 @@
+@page "/purchases/{PurchaseId:int}/return"
+@attribute [Authorize(Policy = Permissions.PurchaseReturnsManage)]
+@inherits PageBase
+@inject PurchaseService Purchases
+@inject PurchaseReturnService PurchaseReturns
+@inject ReportService Reports
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Return to Supplier — Purchase #@PurchaseId</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Back to purchases" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases"))" />
+        <RadzenButton Text="All supplier returns" Icon="list" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchase-returns"))" />
+    </RadzenStack>
+</RadzenStack>
+
+@if (loading)
+{
+    <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Style="height:4px" />
+}
+else if (error is not null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Title="Couldn't open this purchase">
+        @error
+    </RadzenAlert>
+}
+else if (purchase is null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        Purchase #@PurchaseId was not found. It may have been deleted.
+    </RadzenAlert>
+}
+else
+{
+    @* Enter flow: Date → each Return qty → Cash received → Notes → [Save] *@
+    <RadzenRow Gap="1rem" data-enter-group="true">
+        <RadzenColumn Size="12" SizeLG="8">
+            <RadzenCard class="rz-mb-3">
+                <RadzenRow Gap="1rem" AlignItems="AlignItems.Center">
+                    <RadzenColumn Size="12" SizeMD="8">
+                        <div>Purchase # <strong>@purchase.Id</strong> · @Date(purchase.PurchaseDate)@(purchase.BillNo is null ? "" : $" · Bill # {purchase.BillNo}") · total @Money(purchase.Total)</div>
+                        <div>Supplier: <strong>@purchase.Supplier?.Name</strong></div>
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">We owe this supplier now: @Money(balance)</RadzenText>
+                    </RadzenColumn>
+                    <RadzenColumn Size="12" SizeMD="4">
+                        <DateBox Label="Return date" @bind-Value="returnDate" Style="width:100%" />
+                    </RadzenColumn>
+                </RadzenRow>
+            </RadzenCard>
+
+            <RadzenCard>
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="rz-mb-2">
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Items on the bill</RadzenText>
+                    <RadzenButton Text="Return everything possible" Icon="done_all" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                  Disabled="@(!lines.Any(l => l.Returnable > 0))" Click="ReturnAll" />
+                </RadzenStack>
+                @if (!lines.Any(l => l.Returnable > 0))
+                {
+                    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small" class="rz-mb-2">
+                        Nothing from this bill can be returned: it has all been returned already or is no longer in stock.
+                    </RadzenAlert>
+                }
+                <RadzenDataGrid TItem="PurchaseReturnableLine" Data="@lines" Density="Density.Compact" EmptyText="This bill has no items.">
+                    <Columns>
+                        <RadzenDataGridColumn Title="Item"><Template>@context.ProductName</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Bought" Width="75px" TextAlign="TextAlign.Right"><Template>@Qty(context.Bought)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Returned before" Width="90px" TextAlign="TextAlign.Right"><Template>@(context.Returned == 0 ? "" : Qty(context.Returned))</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="In stock" Width="80px" TextAlign="TextAlign.Right"><Template>@Qty(context.OnHand)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Can return" Width="90px" TextAlign="TextAlign.Right"><Template>@Qty(context.Returnable)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Return qty" Width="110px">
+                            <Template>
+                                <RadzenNumeric TValue="decimal" @bind-Value="context.ReturnQty" Min="0" Max="@context.Returnable" ShowUpDown="false"
+                                               Disabled="@(context.Returnable <= 0)" Style="width:100%"
+                                               data-enter-first="@(context == FirstReturnable ? "true" : null)" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Cost" Width="110px" TextAlign="TextAlign.Right"><Template>@Money(context.Cost)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Amount" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(LineAmount(context))</Template></RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenCard>
+        </RadzenColumn>
+
+        <RadzenColumn Size="12" SizeLG="4">
+            <RadzenCard>
+                <RadzenStack Gap="0.75rem">
+                    <TotalLine Label="Items returned" Value="@lines.Count(l => l.ReturnQty > 0).ToString()" />
+                    <TotalLine Label="Return total" Value="@Money(Total)" Strong="true" />
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                        <RadzenFormField Text="Cash received back from supplier" Style="flex:1">
+                            <RadzenNumeric TValue="decimal" @bind-Value="received" Min="0" Max="@Total" ShowUpDown="false" Format="N2" />
+                        </RadzenFormField>
+                        <RadzenButton Text="All" ButtonStyle="ButtonStyle.Light" Click="@(() => received = Total)" />
+                    </RadzenStack>
+                    @if (Total > 0)
+                    {
+                        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small">
+                            @if (Credit > 0)
+                            {
+                                <div>We owe @purchase.Supplier?.Name @Money(Credit) less (@Money(balance) → @Money(balance - Credit)).</div>
+                            }
+                            @if (received > 0)
+                            {
+                                <div>@Money(received) cash comes back from the supplier.</div>
+                            }
+                            <div>Stock goes out.</div>
+                        </RadzenAlert>
+                    }
+                    @if (received > Total)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="color:var(--rz-danger)">Cash received can't be more than the return total.</RadzenText>
+                    }
+                    <RadzenFormField Text="Notes / reason" Style="width:100%">
+                        <RadzenTextArea @bind-Value="notes" Rows="2" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenButton Text="Save return" Icon="save" Size="ButtonSize.Large" IsBusy="Busy" Click="SaveAsync"
+                                  Disabled="@(!lines.Any(l => l.ReturnQty > 0))" data-enter-submit="true" />
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+}
+
+@code {
+    [Parameter] public int PurchaseId { get; set; }
+
+    private Purchase? purchase;
+    private List<PurchaseReturnableLine> lines = [];
+    private bool loading = true;
+    private string? error;
+    private decimal balance, received;
+    private DateTime returnDate = DateTime.Today;
+    private string? notes;
+
+    private static decimal LineAmount(PurchaseReturnableLine l) => Math.Round(l.ReturnQty * l.Cost, 2);
+    private decimal Total => lines.Sum(LineAmount);
+    private decimal Credit => Math.Max(0, Total - received);
+    private PurchaseReturnableLine? FirstReturnable => lines.FirstOrDefault(l => l.Returnable > 0);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            purchase = await Purchases.GetAsync(PurchaseId);
+            if (purchase is not null)
+            {
+                lines = await PurchaseReturns.GetReturnableAsync(PurchaseId);
+                balance = await Reports.GetSupplierBalanceAsync(purchase.SupplierId);
+            }
+        }
+        catch (Exception ex)
+        {
+            error = FriendlyMessage(ex);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void ReturnAll()
+    {
+        foreach (var l in lines)
+            l.ReturnQty = l.Returnable;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (purchase is null) return;
+        var ret = new PurchaseReturn
+        {
+            PurchaseId = purchase.Id,
+            SupplierId = purchase.SupplierId,
+            ReturnDate = returnDate.Date,
+            Received = received,
+            Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(),
+            Lines = lines.Where(l => l.ReturnQty > 0)
+                .Select(l => new PurchaseReturnLine { StockItemId = l.StockItemId, Qty = l.ReturnQty, Cost = l.Cost })
+                .ToList(),
+        };
+        if (await RunAsync(() => PurchaseReturns.CreateAsync(ret), $"Return to supplier saved for purchase #{purchase.Id}, stock taken out"))
+            Nav.NavigateTo("purchase-returns");
+    }
+}

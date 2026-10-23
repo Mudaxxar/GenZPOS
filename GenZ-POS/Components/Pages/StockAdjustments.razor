@@ -1,0 +1,202 @@
+@page "/stock/adjustments"
+@attribute [Authorize(Policy = Permissions.StockAdjust)]
+@inherits PageBase
+@inject StockService Stock
+@inject ReportService Reports
+
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Stock In / Out</RadzenText>
+<RadzenText TextStyle="TextStyle.Body2" class="rz-mb-3">
+    For opening stock, damaged tins, returns and count corrections. Purchases and sales update stock automatically.
+</RadzenText>
+
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeMD="4">
+        <RadzenCard data-enter-group="true">
+            <RadzenStack Gap="1rem">
+                <RadzenSelectBar TValue="bool" @bind-Value="countMode" Size="ButtonSize.Small">
+                    <Items>
+                        <RadzenSelectBarItem Text="Stock in / out" Value="@false" />
+                        <RadzenSelectBarItem Text="Physical count" Value="@true" />
+                    </Items>
+                </RadzenSelectBar>
+                @if (countMode)
+                {
+                    <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                        Enter how many you actually counted. The difference from the system stock is saved as a stock in/out.
+                    </RadzenText>
+                }
+                <RadzenFormField Text="Item" Style="width:100%">
+                    <RadzenDropDown TValue="int?" OpenOnFocus="true" @bind-Value="productId" Data="@products" TextProperty="DisplayName" ValueProperty="Id"
+                                    AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowVirtualization="true"
+                                    Placeholder="Type to search…" data-enter-first="true" />
+                </RadzenFormField>
+                @if (productId is int id && products.FirstOrDefault(p => p.Id == id) is { } current)
+                {
+                    <TotalLine Label="Current stock" Value="@($"{Qty(current.OnHand)} {current.Unit}")" Strong="true" />
+                }
+                @if (countMode)
+                {
+                    <RadzenFormField Text="Counted quantity" Style="width:100%">
+                        <RadzenNumeric TValue="decimal?" @bind-Value="counted" Min="0" ShowUpDown="false" />
+                    </RadzenFormField>
+                    if (counted is decimal c && productId is int pid && products.FirstOrDefault(p => p.Id == pid) is { } cur)
+                    {
+                        var diff = c - cur.OnHand;
+                        <TotalLine Label="Difference" Value="@(diff == 0 ? "No change" : (diff > 0 ? "+" : "−") + Qty(Math.Abs(diff)) + " " + cur.Unit)" Danger="@(diff < 0)" />
+                    }
+                }
+                else
+                {
+                    <RadzenFormField Text="Type" Style="width:100%">
+                        <RadzenDropDown TValue="StockMovementType" OpenOnFocus="true" @bind-Value="type" Data="@types" TextProperty="Text" ValueProperty="Value" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Quantity" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" @bind-Value="qty" Min="0" ShowUpDown="false" />
+                    </RadzenFormField>
+                }
+                <DateBox Label="Date" @bind-Value="date" Style="width:100%" />
+                <RadzenFormField Text="Reason / notes" Style="width:100%">
+                    <RadzenTextBox @bind-Value="notes" MaxLength="250" Placeholder="e.g. 2 tins dented" />
+                </RadzenFormField>
+                <RadzenButton Text="@(countMode ? "Save count" : "Save")" Icon="save" IsBusy="Busy" Click="SaveAsync"
+                              Disabled="@(productId is null || (countMode ? counted is null : qty <= 0))" data-enter-submit="true" />
+            </RadzenStack>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeMD="8">
+        <RadzenCard>
+            <RadzenText TextStyle="TextStyle.H6">Recent manual entries</RadzenText>
+            <RadzenDataGrid @ref="grid" TItem="StockMovement" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                            AllowPaging="true" PageSize="15" ShowPagingSummary="true" Density="Density.Compact" EmptyText="No manual entries yet.">
+                <Columns>
+                    <RadzenDataGridColumn Title="Date" Width="120px"><Template>@Date(context.MovementDate)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Item"><Template>@context.StockItem?.DisplayName</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Type" Width="120px"><Template>@TypeText(context.Type)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="In" Width="80px" TextAlign="TextAlign.Right"><Template>@(context.QtyIn == 0 ? "" : Qty(context.QtyIn))</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Out" Width="80px" TextAlign="TextAlign.Right"><Template>@(context.QtyOut == 0 ? "" : Qty(context.QtyOut))</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Property="Notes" Title="Notes" />
+                    <RadzenDataGridColumn Width="70px" TextAlign="TextAlign.Right">
+                        <Template>
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" Click="@(() => DeleteAsync(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private record TypeOption(StockMovementType Value, string Text);
+
+    private static readonly TypeOption[] types =
+    [
+        new(StockMovementType.AdjustIn, "Stock in (+)"),
+        new(StockMovementType.AdjustOut, "Stock out (−)"),
+        new(StockMovementType.Opening, "Opening stock (+)"),
+    ];
+
+    private static readonly StockMovementType[] manualTypes =
+        [StockMovementType.Opening, StockMovementType.AdjustIn, StockMovementType.AdjustOut];
+
+    private static string TypeText(StockMovementType t) => types.FirstOrDefault(x => x.Value == t)?.Text ?? t.ToString();
+
+    private RadzenDataGrid<StockMovement> grid = default!;
+    private List<StockMovement>? rows; // null until first load → Radzen calls LoadData right after first render
+    private int count, loadVersion;
+    private bool loading = true;
+    private List<ProductLookup> products = [];
+
+    private int? productId;
+    private StockMovementType type = StockMovementType.AdjustIn;
+    private decimal qty;
+    private bool countMode;
+    private decimal? counted;
+    private DateTime date = DateTime.Today;
+    private string? notes;
+
+    protected override Task OnInitializedAsync() => RefreshProductsAsync();
+
+    /// <summary>Reloads the item picker (with current on-hand); errors only show a message.</summary>
+    private async Task RefreshProductsAsync()
+    {
+        try
+        {
+            products = await Reports.GetProductLookupAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = db.StockMovements.AsNoTracking().Where(m => manualTypes.Contains(m.Type));
+            var total = await q.CountAsync();
+            var page = await q.Include(m => m.StockItem).ThenInclude(v => v!.Product).ThenInclude(p => p!.Company)
+                .OrderByDescending(m => m.Id).Skip(args.Skip ?? 0).Take(args.Top ?? 15).ToListAsync();
+
+            if (version != loadVersion) return;
+            count = total;
+            rows = page;
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (productId is not int id) return;
+        if (countMode)
+        {
+            if (counted is not decimal c) return;
+            decimal diff = 0;
+            if (!await RunAsync(async () => diff = await Stock.CountAsync(id, date.Date, c, string.IsNullOrWhiteSpace(notes) ? null : notes.Trim())))
+                return;
+            if (diff == 0)
+            {
+                Toast(NotificationSeverity.Info, $"Count matches the system stock ({Qty(c)}). Nothing was changed.", 4000);
+            }
+            else
+            {
+                Toast(NotificationSeverity.Success, $"Stock corrected: {(diff > 0 ? "+" : "−")}{Qty(Math.Abs(diff))} (now {Qty(c)})");
+                await grid.FirstPage(true);
+            }
+            counted = null;
+            notes = null;
+            await RefreshProductsAsync();
+            return;
+        }
+        if (await RunAsync(() => Stock.AdjustAsync(id, date.Date, type, qty, string.IsNullOrWhiteSpace(notes) ? null : notes.Trim()), "Stock updated"))
+        {
+            qty = 0;
+            notes = null;
+            await RefreshProductsAsync();
+            await grid.FirstPage(true);
+        }
+    }
+
+    private async Task DeleteAsync(StockMovement m)
+    {
+        if (!await ConfirmAsync("Delete this stock entry?")) return;
+        if (await RunAsync(() => Stock.DeleteAdjustmentAsync(m.Id), "Entry deleted"))
+        {
+            await RefreshProductsAsync();
+            await grid.Reload();
+        }
+    }
+}

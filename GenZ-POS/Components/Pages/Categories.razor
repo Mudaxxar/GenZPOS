@@ -1,0 +1,195 @@
+﻿@page "/categories"
+@attribute [Authorize(Policy = Permissions.CatalogManage)]
+@inherits PageBase
+
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Categories &amp; Sub-categories</RadzenText>
+
+<RadzenRow Gap="1rem">
+    @* Categories *@
+    <RadzenColumn Size="12" SizeMD="6">
+        <RadzenCard>
+            <RadzenText TextStyle="TextStyle.H6">Categories</RadzenText>
+            <RadzenTemplateForm TItem="Category" Data="@category" Submit="SaveCategoryAsync">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Start" Gap="0.5rem" class="rz-mb-2">
+                    <RadzenStack Gap="0" Style="flex:1">
+                        <RadzenFormField Text="@(category.Id == 0 ? "New category" : "Rename category")" Style="width:100%">
+                            <RadzenTextBox Name="CatName" @bind-Value="category.Name" MaxLength="100" />
+                        </RadzenFormField>
+                        <RadzenRequiredValidator Component="CatName" Text="Name is required" />
+                    </RadzenStack>
+                    <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Save" class="rz-mt-2" />
+                    <RadzenButton Icon="close" ButtonStyle="ButtonStyle.Light" class="rz-mt-2" Click="@(() => category = new())" />
+                </RadzenStack>
+            </RadzenTemplateForm>
+
+            <RadzenDataGrid @ref="categoryGrid" TItem="Category" Data="@categories" Density="Density.Compact"
+                            SelectionMode="DataGridSelectionMode.Single" @bind-Value="@selectedCategories"
+                            RowSelect="@(c => LoadSubsAsync(c))" EmptyText="No categories.">
+                <Columns>
+                    <RadzenDataGridColumn Property="Name" Title="Category" />
+                    <RadzenDataGridColumn Title="Subs" Width="70px" TextAlign="TextAlign.Center"><Template>@context.SubCategories.Count</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="110px" TextAlign="TextAlign.Right">
+                        <Template>
+                            <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                          Click="@(() => category = new Category { Id = context.Id, Name = context.Name })" />
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined"
+                                          Click="@(() => DeleteCategoryAsync(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+
+    @* Sub-categories of the selected category *@
+    <RadzenColumn Size="12" SizeMD="6">
+        <RadzenCard>
+            @if (selected is null)
+            {
+                <RadzenText TextStyle="TextStyle.Body1">Select a category on the left to see and edit its sub-categories.</RadzenText>
+            }
+            else
+            {
+                <RadzenText TextStyle="TextStyle.H6">Sub-categories of @selected.Name</RadzenText>
+                <RadzenTemplateForm TItem="SubCategory" Data="@sub" Submit="SaveSubAsync">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Start" Gap="0.5rem" class="rz-mb-2">
+                        <RadzenStack Gap="0" Style="flex:1">
+                            <RadzenFormField Text="@(sub.Id == 0 ? "New sub-category" : "Rename sub-category")" Style="width:100%">
+                                <RadzenTextBox Name="SubName" @bind-Value="sub.Name" MaxLength="100" />
+                            </RadzenFormField>
+                            <RadzenRequiredValidator Component="SubName" Text="Name is required" />
+                        </RadzenStack>
+                        <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Save" class="rz-mt-2" />
+                        <RadzenButton Icon="close" ButtonStyle="ButtonStyle.Light" class="rz-mt-2" Click="NewSub" />
+                    </RadzenStack>
+                </RadzenTemplateForm>
+
+                <RadzenDataGrid TItem="SubCategory" Data="@subs" Density="Density.Compact" EmptyText="No sub-categories yet.">
+                    <Columns>
+                        <RadzenDataGridColumn Property="Name" Title="Sub-category" />
+                        <RadzenDataGridColumn Width="110px" TextAlign="TextAlign.Right">
+                            <Template>
+                                <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                              Click="@(() => sub = new SubCategory { Id = context.Id, CategoryId = context.CategoryId, Name = context.Name })" />
+                                <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined"
+                                              Click="@(() => DeleteSubAsync(context))" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            }
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private RadzenDataGrid<Category> categoryGrid = default!;
+    private List<Category> categories = [];
+    private IList<Category>? selectedCategories;
+    private Category? selected;
+    private Category category = new();
+
+    private List<SubCategory> subs = [];
+    private SubCategory sub = new();
+
+    protected override Task OnInitializedAsync() => LoadCategoriesAsync();
+
+    private async Task LoadCategoriesAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            categories = await db.Categories.AsNoTracking().Include(c => c.SubCategories).OrderBy(c => c.Name).ToListAsync();
+
+            if (selected is not null)
+            {
+                selected = categories.FirstOrDefault(c => c.Id == selected.Id);
+                selectedCategories = selected is null ? null : [selected];
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    private async Task LoadSubsAsync(Category c)
+    {
+        selected = c;
+        NewSub();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            subs = await db.SubCategories.AsNoTracking().Where(s => s.CategoryId == c.Id).OrderBy(s => s.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            subs = [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    private void NewSub() => sub = new SubCategory { CategoryId = selected?.Id ?? 0 };
+
+    private async Task SaveCategoryAsync()
+    {
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                // Save a copy so a failed insert can't leave the form's model with an Id set.
+                var entity = new Category { Id = category.Id, Name = category.Name.Trim() };
+                if (entity.Id == 0) db.Categories.Add(entity); else db.Categories.Update(entity);
+                await db.SaveChangesAsync();
+            }, "Category saved"))
+        {
+            category = new();
+            await LoadCategoriesAsync();
+        }
+    }
+
+    private async Task DeleteCategoryAsync(Category c)
+    {
+        if (!await ConfirmAsync($"Delete category \"{c.Name}\"? Its sub-categories must be deleted first.")) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                db.Categories.Remove(new Category { Id = c.Id });
+                await db.SaveChangesAsync();
+            }, "Deleted"))
+        {
+            if (selected?.Id == c.Id) { selected = null; subs = []; }
+            await LoadCategoriesAsync();
+        }
+    }
+
+    private async Task SaveSubAsync()
+    {
+        if (selected is null) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                var entity = new SubCategory { Id = sub.Id, CategoryId = selected.Id, Name = sub.Name.Trim() };
+                if (entity.Id == 0) db.SubCategories.Add(entity); else db.SubCategories.Update(entity);
+                await db.SaveChangesAsync();
+            }, "Sub-category saved"))
+        {
+            await LoadSubsAsync(selected);
+            await LoadCategoriesAsync();
+        }
+    }
+
+    private async Task DeleteSubAsync(SubCategory s)
+    {
+        if (!await ConfirmAsync($"Delete sub-category \"{s.Name}\"?")) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                db.SubCategories.Remove(new SubCategory { Id = s.Id });
+                await db.SaveChangesAsync();
+            }, "Deleted") && selected is not null)
+        {
+            await LoadSubsAsync(selected);
+            await LoadCategoriesAsync();
+        }
+    }
+}

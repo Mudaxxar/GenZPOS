@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="GenZ-POS.Tests/GenZ-POS.Tests.csproj" />
+  <Project Path="GenZ-POS/GenZ-POS.csproj" />
+</Solution>

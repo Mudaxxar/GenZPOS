@@ -1,0 +1,155 @@
+@page "/reports/sales-profit"
+@attribute [Authorize(Policy = Permissions.ReportsProfit)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="no-print">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Sales &amp; Profit</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Print" Icon="print" ButtonStyle="ButtonStyle.Light" Click="PrintAsync" Disabled="@(rows is null)" />
+        <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportAsync" Disabled="@(rows is null)" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard class="rz-mb-3 no-print">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="LoadAsync" />
+        <RadzenFormField Text="Group by" Style="width:150px">
+            <RadzenDropDown TValue="bool" @bind-Value="byMonth" @bind-Value:after="LoadAsync" Data="@groupOptions" TextProperty="Text" ValueProperty="Value" />
+        </RadzenFormField>
+        <RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="LoadAsync" IsBusy="@loading" class="rz-mb-2" />
+    </RadzenStack>
+</RadzenCard>
+
+@if (rows is null)
+{
+    if (loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    }
+}
+else
+{
+    <RadzenCard>
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem" class="rz-mb-2">
+            <ReportHeader Title="@($"Sales & Profit ({(shownByMonth ? "monthly" : "daily")})")" From="@shownFrom" To="@shownTo" />
+            <RadzenStack Gap="0.25rem" Style="width:300px">
+                <TotalLine Label="Net sales" Value="@Money(NetSales)" />
+                <TotalLine Label="Cost of goods" Value="@Money(Cost)" />
+                <TotalLine Label="Gross profit" Value="@Money(Profit)" Strong="true" Danger="@(Profit < 0)" />
+                <TotalLine Label="Margin" Value="@MarginText(TotalMargin)" />
+            </RadzenStack>
+        </RadzenStack>
+
+        <RadzenDataGrid TItem="SalesProfitRow" Data="@rows" AllowPaging="@(!printAll)" PageSize="62" ShowPagingSummary="true"
+                        Density="Density.Compact" EmptyText="No sales or returns in this period.">
+            <Columns>
+                <RadzenDataGridColumn Title="@(shownByMonth ? "Month" : "Date")" Width="120px">
+                    <Template>@(shownByMonth ? context.Period.ToString("MMM yyyy") : Date(context.Period))</Template>
+                    <FooterTemplate><strong>Total</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Invoices" Width="85px" TextAlign="TextAlign.Right">
+                    <Template>@context.Invoices</Template>
+                    <FooterTemplate><strong>@(rows!.Sum(r => r.Invoices))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Gross sales" TextAlign="TextAlign.Right">
+                    <Template>@Money(context.GrossSales)</Template>
+                    <FooterTemplate><strong>@Money(rows!.Sum(r => r.GrossSales))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Discount" TextAlign="TextAlign.Right">
+                    <Template>@(context.Discount == 0 ? "" : Money(context.Discount))</Template>
+                    <FooterTemplate><strong>@Money(rows!.Sum(r => r.Discount))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Returns" TextAlign="TextAlign.Right">
+                    <Template>@(context.Returns == 0 ? "" : Money(context.Returns))</Template>
+                    <FooterTemplate><strong>@Money(rows!.Sum(r => r.Returns))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Net sales" TextAlign="TextAlign.Right">
+                    <Template><strong>@Money(context.NetSales)</strong></Template>
+                    <FooterTemplate><strong>@Money(NetSales)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Cost of goods" TextAlign="TextAlign.Right">
+                    <Template>@Money(context.Cost)</Template>
+                    <FooterTemplate><strong>@Money(Cost)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Gross profit" TextAlign="TextAlign.Right">
+                    <Template><span style="@(context.Profit < 0 ? "color:var(--rz-danger)" : null)">@Money(context.Profit)</span></Template>
+                    <FooterTemplate><strong>@Money(Profit)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Margin" Width="85px" TextAlign="TextAlign.Right">
+                    <Template>@MarginText(context.Margin)</Template>
+                    <FooterTemplate><strong>@MarginText(TotalMargin)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
+            Net sales = invoice totals (after discount) − sales returns. Cost of goods = items sold × purchase price at the time of sale − returned items at the same cost.
+        </RadzenText>
+    </RadzenCard>
+}
+
+@code {
+    private record GroupOption(bool Value, string Text);
+    private static readonly GroupOption[] groupOptions = [new(false, "Day"), new(true, "Month")];
+
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+    private DateTime shownFrom, shownTo;
+    private bool byMonth, shownByMonth, loading, printAll;
+    private int loadVersion;
+    private List<SalesProfitRow>? rows;
+
+    private decimal NetSales => rows?.Sum(r => r.NetSales) ?? 0;
+    private decimal Cost => rows?.Sum(r => r.Cost) ?? 0;
+    private decimal Profit => NetSales - Cost;
+    private decimal? TotalMargin => NetSales == 0 ? null : Math.Round(Profit / NetSales * 100, 1);
+
+    private static string MarginText(decimal? m) => m is decimal v ? $"{v:0.#}%" : "";
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        var (f, t, m) = (from, to, byMonth);
+        loading = true;
+        try
+        {
+            var result = await Reports.GetSalesProfitAsync(f, t, m);
+            if (version != loadVersion) return;
+            rows = result;
+            (shownFrom, shownTo, shownByMonth) = (f, t, m);
+            printAll = false;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        printAll = true; // print every row, not just the current page
+        StateHasChanged();
+        await Task.Delay(150);
+        await Desktop.PrintAsync();
+    }
+
+    private async Task ExportAsync()
+    {
+        if (rows is null) return;
+        var lines = new List<object?[]> { new object?[] { shownByMonth ? "Month" : "Date", "Invoices", "Gross sales", "Discount", "Returns", "Net sales", "Cost of goods", "Gross profit", "Margin %" } };
+        lines.AddRange(rows.Select(r => new object?[]
+            { shownByMonth ? r.Period.ToString("MMM yyyy") : Date(r.Period), r.Invoices, r.GrossSales, r.Discount, r.Returns, r.NetSales, r.Cost, r.Profit, r.Margin }));
+        lines.Add(["Total", rows.Sum(r => r.Invoices), rows.Sum(r => r.GrossSales), rows.Sum(r => r.Discount), rows.Sum(r => r.Returns),
+            NetSales, Cost, Profit, TotalMargin]);
+
+        var path = await Desktop.SaveTextFileAsync($"Sales and profit {shownFrom:yyyy-MM-dd} to {shownTo:yyyy-MM-dd}.csv", "CSV files (*.csv)|*.csv", Csv(lines));
+        if (path is not null)
+            Toast(NotificationSeverity.Success, $"Saved to {path}");
+    }
+}

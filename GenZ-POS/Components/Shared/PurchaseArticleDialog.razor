@@ -1,0 +1,125 @@
+@inherits PageBase
+@inject StockItemService StockItems
+
+@* New Purchase → the picked product's panel ("+" expands it), for the article no. shown (read-only) on the Item row:
+   Barcode (automatic, read-only: the next SH… no.) → Colour → Size → Qty → [Add]. Owner: ONE BARCODE PER PIECE — Qty 3
+   creates 3 new stock items (the shown barcode and the next two) and puts 3 lines of qty 1 in the purchase table below
+   (Added); the panel stays open for the next colour / size (StockItemService.AddPiecesAsync). Prices come from the Item
+   row (Cost / Retail). *@
+@if (product is null)
+{
+    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+}
+else
+{
+    <div data-enter-group="true">
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-mt-0 rz-mb-2">
+            <strong>@product.DisplayName</strong> · article @ArticleNo
+            @if (items.Count > 0)
+            {
+                <span style="opacity:0.7"> — @items.Count piece(s) so far: @string.Join(" · ", new[] { string.Join(", ", Colours), Sizes.Count > 0 ? "sizes " + string.Join(", ", Sizes) : "" }.Where(s => s.Length > 0))</span>
+            }
+        </RadzenText>
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+            @* Automatic and read-only, like the article no.: the first new piece's barcode. *@
+            <RadzenFormField Text="Barcode (new)" Style="width:150px" class="readonly-field">
+                <RadzenTextBox Value="@reservedBarcode" ReadOnly="true" tabindex="-1"
+                               title="The first piece gets this barcode; each further piece the next one" />
+            </RadzenFormField>
+            <RadzenFormField Text="Colour" Style="width:150px">
+                <RadzenTextBox @bind-Value="colour" Immediate="true" MaxLength="60" data-enter-first="true" Placeholder="e.g. Black" />
+            </RadzenFormField>
+            <RadzenFormField Text="Size" Style="width:110px">
+                <RadzenTextBox @bind-Value="size" Immediate="true" MaxLength="40" Placeholder="e.g. 42" />
+            </RadzenFormField>
+            <RadzenFormField Text="Qty" Style="width:90px">
+                <RadzenNumeric TValue="int" @bind-Value="qty" Min="1" Max="400" ShowUpDown="false" TextAlign="TextAlign.Right" />
+            </RadzenFormField>
+            <RadzenButton Text="Add" Icon="add" IsBusy="Busy" Disabled="@(qty < 1)" Click="AddAsync" data-enter-submit="true" />
+            <RadzenButton Icon="expand_less" ButtonStyle="ButtonStyle.Light" title="Collapse" Click="@(() => Cancelled.InvokeAsync())" />
+        </RadzenStack>
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-1 rz-mb-0" Style="opacity:0.75">
+            Each piece gets its own barcode: Qty @qty adds @qty line(s) of 1@(qty > 1 ? $", barcodes from {reservedBarcode} on" : "").
+            The panel stays open for the next colour / size.
+        </RadzenText>
+    </div>
+}
+
+@code {
+    /// <summary>The picked product (from the Products table).</summary>
+    [Parameter, EditorRequired] public int ProductId { get; set; }
+
+    /// <summary>The article no. on the Item row (automatic, read-only): every stock item added here gets it.</summary>
+    [Parameter, EditorRequired] public string ArticleNo { get; set; } = "";
+
+    /// <summary>Cost price and retail price from the Item row: used for every stock item added.</summary>
+    [Parameter] public decimal Cost { get; set; }
+    [Parameter] public decimal Retail { get; set; }
+    /// <summary>Low-stock level a new stock item starts with (the product's latest item's).</summary>
+    [Parameter] public decimal ReorderLevel { get; set; }
+
+    /// <summary>The purchase lines of one Add: one line of qty 1 per piece.</summary>
+    [Parameter] public EventCallback<List<PurchaseLine>> Added { get; set; }
+    [Parameter] public EventCallback Cancelled { get; set; }
+
+    private Product? product;
+    private List<StockItem> items = [];   // this article's stock items (pieces)
+    private string? size, colour, reservedBarcode;
+    private int qty = 1;
+
+    private List<string> Colours =>
+        items.Select(i => i.Colour).Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    private List<string> Sizes => StockItemService.SortSizes(items.Select(i => i.Size));
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            product = await db.Products.AsNoTracking().Include(p => p.Company).FirstOrDefaultAsync(p => p.Id == ProductId)
+                      ?? throw new BusinessException("This product no longer exists.");
+            reservedBarcode = await ProductCodes.NextBarcodeAsync(db);
+            await LoadItemsAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+            await Cancelled.InvokeAsync();
+        }
+    }
+
+    /// <summary>This article's pieces so far (for the summary line).</summary>
+    private async Task LoadItemsAsync() =>
+        items = (await StockItems.GetStockItemsAsync(ProductId)).Where(i => Same(i.ArticleNo, ArticleNo)).ToList();
+
+    private async Task AddAsync()
+    {
+        if (product is null || qty < 1) return;
+        if (Cost <= 0 && !await ConfirmAsync("Cost price is 0. Add at no cost?")) return;
+
+        List<PurchaseLine>? lines = null;
+        var ok = await RunAsync(async () =>
+        {
+            var pieces = await StockItems.AddPiecesAsync(product.Id, ArticleNo, colour, size, reservedBarcode, qty,
+                new StockItemPrices(Cost, Retail, ReorderLevel));
+            lines = pieces.Select(p => new PurchaseLine { StockItemId = p.StockItemId, Qty = 1, Cost = Cost, SalePrice = Retail }).ToList();
+            Toast(NotificationSeverity.Success, pieces.Count == 1
+                ? $"Article {ArticleNo} · barcode {pieces[0].Barcode}"
+                : $"Article {ArticleNo} · {pieces.Count} pieces, barcodes {pieces[0].Barcode} – {pieces[^1].Barcode}");
+        });
+        if (!ok || lines is null) return;
+
+        await Added.InvokeAsync(lines);
+
+        // Ready for the next colour / size: same colour, empty size, qty 1, the next barcode.
+        await LoadItemsAsync();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        reservedBarcode = await ProductCodes.NextBarcodeAsync(db);
+        size = null;
+        qty = 1;
+    }
+
+    private static bool Same(string? a, string? b) =>
+        string.Equals(a?.Trim() ?? "", b?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
+}

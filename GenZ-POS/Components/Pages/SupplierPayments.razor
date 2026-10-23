@@ -1,0 +1,187 @@
+@page "/supplier-payments"
+@attribute [Authorize(Policy = Permissions.SuppliersPay)]
+@inherits PageBase
+@inject ReportService Reports
+
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Pay Supplier</RadzenText>
+
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeMD="4">
+        <RadzenCard>
+            <RadzenTemplateForm TItem="SupplierPayment" Data="@model" Submit="SaveAsync">
+                <RadzenStack Gap="1rem">
+                    <RadzenFormField Text="Supplier *" Style="width:100%">
+                        <RadzenDropDown TValue="int" OpenOnFocus="true" Name="SupplierId" @bind-Value="model.SupplierId" @bind-Value:after="SupplierChangedAsync"
+                                        Data="@suppliers" TextProperty="Label" ValueProperty="Id" AllowFiltering="true"
+                                        FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="Select supplier" />
+                    </RadzenFormField>
+                    <RadzenDataAnnotationValidator Component="SupplierId" />
+
+                    @if (model.SupplierId > 0)
+                    {
+                        <TotalLine Label="We owe them" Value="@Money(balance)" Strong="true" Danger="@(balance > 0)" />
+                    }
+
+                    <DateBox Label="Date" Name="PaymentDate" @bind-Value="model.PaymentDate" Style="width:100%" />
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                        <RadzenFormField Text="Amount *" Style="flex:1">
+                            <RadzenNumeric TValue="decimal" Name="Amount" @bind-Value="model.Amount" Min="0" ShowUpDown="false" Format="N2" />
+                        </RadzenFormField>
+                        <RadzenButton Text="Full balance" ButtonStyle="ButtonStyle.Light" Disabled="@(balance <= 0)" Click="@(() => model.Amount = balance)" />
+                    </RadzenStack>
+                    <RadzenDataAnnotationValidator Component="Amount" />
+                    <RadzenFormField Text="Method" Style="width:100%">
+                        <RadzenDropDown TValue="PaymentMethod" OpenOnFocus="true" Name="Method" @bind-Value="model.Method" Data="@(Enum.GetValues<PaymentMethod>())" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Notes (cheque #, bank ref…)" Style="width:100%">
+                        <RadzenTextBox Name="Notes" @bind-Value="model.Notes" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Save payment" Icon="save" IsBusy="Busy" />
+                </RadzenStack>
+            </RadzenTemplateForm>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeMD="8">
+        <RadzenCard>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+                <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" />
+                <RadzenFormField Text="Supplier" Style="width:220px">
+                    <RadzenDropDown TValue="int?" @bind-Value="filterSupplierId" @bind-Value:after="ReloadAsync" Data="@filterSuppliers" TextProperty="Label" ValueProperty="Id"
+                                    AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="All suppliers" />
+                </RadzenFormField>
+                <RadzenText TextStyle="TextStyle.Body1" class="rz-mb-3">Paid out: <strong>@Money(sum)</strong></RadzenText>
+            </RadzenStack>
+
+            <RadzenDataGrid @ref="grid" TItem="SupplierPayment" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                            AllowPaging="true" PageSize="15" ShowPagingSummary="true" Density="Density.Compact" EmptyText="No supplier payments match these filters.">
+                <Columns>
+                    <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.PaymentDate)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Supplier">
+                        <Template><RadzenLink Path="@($"supplier-ledger/{context.SupplierId}")" Text="@context.Supplier?.Name" /></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Property="Method" Title="Method" Width="95px" />
+                    <RadzenDataGridColumn Property="Notes" Title="Notes" />
+                    <RadzenDataGridColumn Title="Amount" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Amount)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="70px" TextAlign="TextAlign.Right">
+                        <Template>
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" Click="@(() => DeleteAsync(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private record SupplierOption(int Id, string Label);
+
+    /// <summary>Pre-selects a supplier, e.g. from the Suppliers page.</summary>
+    [SupplyParameterFromQuery(Name = "supplier")] public int? PreselectSupplierId { get; set; }
+
+    private RadzenDataGrid<SupplierPayment> grid = default!;
+    private List<SupplierPayment>? rows; // null until first load → Radzen calls LoadData right after first render
+    private int count, loadVersion;
+    private bool loading = true;
+    private decimal sum, balance;
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+
+    private SupplierPayment model = new();
+    private List<SupplierOption> suppliers = [];
+    private List<SupplierOption> filterSuppliers = [];
+    private int? filterSupplierId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Show what's owed next to each name so the right supplier is easy to pick.
+        var all = await Reports.GetSupplierBalancesAsync();
+        filterSuppliers = all.Select(s => new SupplierOption(s.Id, s.Name)).ToList();
+        suppliers = all
+            .Where(s => s.IsActive || s.Balance != 0 || s.Id == PreselectSupplierId)
+            .Select(s => new SupplierOption(s.Id, s.Balance > 0 ? $"{s.Name}  —  owe {Money(s.Balance)}" : s.Name))
+            .ToList();
+
+        if (PreselectSupplierId is int id)
+        {
+            model.SupplierId = id;
+            await SupplierChangedAsync();
+        }
+    }
+
+    private async Task SupplierChangedAsync() =>
+        balance = model.SupplierId > 0 ? await Reports.GetSupplierBalanceAsync(model.SupplierId) : 0;
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var end = to.Date.AddDays(1);
+            var q = db.SupplierPayments.AsNoTracking().Where(p => p.PaymentDate >= from.Date && p.PaymentDate < end);
+            if (filterSupplierId is not null) q = q.Where(p => p.SupplierId == filterSupplierId);
+            var c = await q.CountAsync();
+            var s = c == 0 ? 0 : await q.SumAsync(p => p.Amount);
+            var page = await q.Include(p => p.Supplier).OrderByDescending(p => p.PaymentDate).ThenByDescending(p => p.Id)
+                .Skip(args.Skip ?? 0).Take(args.Top ?? 15).ToListAsync();
+            if (version != loadVersion) return;
+            (count, sum, rows) = (c, s, page);
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task SaveAsync()
+    {
+        if (model.Amount > balance && balance > 0 &&
+            !await ConfirmAsync($"You owe {Money(balance)} but are paying {Money(model.Amount)}. Save anyway (advance payment)?"))
+            return;
+
+        var payment = new SupplierPayment
+        {
+            SupplierId = model.SupplierId,
+            PaymentDate = model.PaymentDate.Date,
+            Amount = model.Amount,
+            Method = model.Method,
+            Notes = string.IsNullOrWhiteSpace(model.Notes) ? null : model.Notes.Trim(),
+        };
+
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                db.SupplierPayments.Add(payment);
+                await db.SaveChangesAsync();
+            }, $"Payment of {Money(payment.Amount)} saved"))
+        {
+            // Keep supplier, date and method for the next entry.
+            model = new SupplierPayment { SupplierId = payment.SupplierId, Method = payment.Method, PaymentDate = payment.PaymentDate };
+            await SupplierChangedAsync();
+            await grid.Reload();
+        }
+    }
+
+    private async Task DeleteAsync(SupplierPayment p)
+    {
+        if (!await ConfirmAsync($"Delete payment of {Money(p.Amount)} to {p.Supplier?.Name}?")) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await db.SupplierPayments.Where(x => x.Id == p.Id).ExecuteDeleteAsync();
+            }, "Payment deleted"))
+        {
+            await SupplierChangedAsync();
+            await grid.Reload();
+        }
+    }
+}

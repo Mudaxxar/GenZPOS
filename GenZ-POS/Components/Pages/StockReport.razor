@@ -1,0 +1,188 @@
+@page "/stock"
+@attribute [Authorize(Policy = Permissions.StockView)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Stock Report</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Item history" Icon="history" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("stock/history"))" />
+        <RadzenButton Text="Stock in / out" Icon="swap_vert" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("stock/adjustments"))" />
+        <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportAsync" IsBusy="Busy" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center" class="rz-mb-2">
+        <RadzenTextBox Placeholder="Search barcode, article no., product, colour or brand…" @bind-Value="filter.Search" @bind-Value:after="ReloadAsync" Style="min-width:280px; flex:1" />
+        <RadzenDropDown TValue="int?" @bind-Value="filter.CompanyId" @bind-Value:after="ReloadAsync" Data="@companies" TextProperty="Name" ValueProperty="Id"
+                        Placeholder="All companies" AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Style="width:200px" />
+        <RadzenDropDown TValue="int?" @bind-Value="filter.CategoryId" @bind-Value:after="ReloadAsync" Data="@categories" TextProperty="Name" ValueProperty="Id"
+                        Placeholder="All categories" AllowClear="true" Style="width:200px" />
+        <RadzenDropDown TValue="StockLevelFilter" @bind-Value="filter.Stock" @bind-Value:after="ReloadAsync" Data="@stockOptions" TextProperty="Text" ValueProperty="Value"
+                        Style="width:150px" title="Which pieces" />
+    </RadzenStack>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1.5rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Articles: <strong>@count</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Pieces in stock: <strong>@Qty(totalPieces)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Stock value: <strong>@Money(totalValue)</strong></RadzenText>
+    </RadzenStack>
+
+    @* Grouped by article no. (owner): a header per article (product, pieces in stock, value), then its pieces. Paged by
+       article in SQL (ReportService.GetStockReportAsync), so an article is never split over two pages. *@
+    <RadzenDataGrid @ref="grid" TItem="StockReportRow" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                    AllowPaging="true" PageSize="10" ShowPagingSummary="true" PagingSummaryFormat="Page {0} of {1} ({2} articles)"
+                    AllowGrouping="true" HideGroupedColumn="true" Render="@OnRender" class="stock-grid"
+                    Density="Density.Compact" EmptyText="No stock matches." RowRender="@RowRender"
+                    RowDoubleClick="@(a => OpenProductAsync(a.Data!))">
+        <GroupHeaderTemplate>
+            @* The article's own totals (all its pieces, from SQL), not just the rows the filter shows. *@
+            @{ var head = context.Data.Items?.Cast<StockReportRow>().FirstOrDefault(); }
+            <span class="article-head">
+                <strong>@context.Data.Key</strong>
+                @if (head is not null)
+                {
+                    <span> · @string.Join(" · ", new[] { head.Company, head.Name, head.PackSize }.Where(s => !string.IsNullOrWhiteSpace(s)))</span>
+                    <span class="article-meta"> · @head.Category › @head.SubCategory</span>
+                    @if (head.ArticleInStock > 0)
+                    {
+                        <span class="article-stock">@Qty(head.ArticleInStock) in stock · @Money(head.ArticleValue)</span>
+                    }
+                    else
+                    {
+                        <span class="article-stock out">none in stock</span>
+                    }
+                    @if (head.ArticleSold > 0)
+                    {
+                        <span class="article-meta"> · @head.ArticleSold sold</span>
+                    }
+                }
+            </span>
+        </GroupHeaderTemplate>
+        <Columns>
+            <RadzenDataGridColumn Property="ArticleNo" Title="Article no." />
+            <RadzenDataGridColumn Title="Barcode" Width="160px">
+                <Template><strong>@context.Barcode</strong>@if (context.OnHand <= 0) { <span class="sold-tag">sold</span> }</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="Colour" Title="Colour" Width="140px" />
+            <RadzenDataGridColumn Title="Size" Width="90px"><Template><strong>@context.Size</strong></Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Cost" Width="120px" TextAlign="TextAlign.Right"><Template>@Money(context.PurchasePrice)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Price" Width="120px" TextAlign="TextAlign.Right"><Template>@Money(context.SalePrice)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Value" Width="130px" TextAlign="TextAlign.Right"><Template>@Money(context.StockValue)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Width="56px" TextAlign="TextAlign.Center">
+                <Template>
+                    <RadzenButton Icon="history" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Item history (stock card)"
+                                  Click="@(() => Nav.NavigateTo($"stock/{context.Id}/history"))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+    <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
+        One barcode per piece, grouped by article no. Value = cost × pieces in stock. Double-click a row to edit the product.
+    </RadzenText>
+</RadzenCard>
+
+@code {
+    /// <summary>?out=true opens with sold pieces (dashboard link); ?low=true is kept for old links (all pieces).</summary>
+    [SupplyParameterFromQuery(Name = "low")] public bool Low { get; set; }
+    [SupplyParameterFromQuery(Name = "out")] public bool Out { get; set; }
+
+    private record StockOption(StockLevelFilter Value, string Text);
+
+    private static readonly StockOption[] stockOptions =
+    [
+        new(StockLevelFilter.InStock, "In stock"),
+        new(StockLevelFilter.Out, "Sold"),
+        new(StockLevelFilter.All, "All pieces"),
+    ];
+
+    private RadzenDataGrid<StockReportRow> grid = default!;
+    private List<StockReportRow>? rows; // null until first load → Radzen calls LoadData right after first render
+    private int count, loadVersion;
+    private decimal totalValue, totalPieces;
+    private bool loading = true;
+    private readonly StockReportFilter filter = new();
+    private List<Company> companies = [];
+    private List<Category> categories = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        filter.Stock = Out ? StockLevelFilter.Out : Low ? StockLevelFilter.All : StockLevelFilter.InStock;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            companies = await db.Companies.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+            categories = await db.Categories.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    /// <summary>Group by article no. from the start.</summary>
+    private void OnRender(DataGridRenderEventArgs<StockReportRow> args)
+    {
+        if (!args.FirstRender) return;
+        grid.Groups.Add(new GroupDescriptor { Property = nameof(StockReportRow.ArticleNo), Title = "Article no." });
+        StateHasChanged();
+    }
+
+    private static void RowRender(RowRenderEventArgs<StockReportRow> args)
+    {
+        if (args.Data is { OnHand: <= 0 })
+            args.Attributes["class"] = "sold-row";
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            // Skip / Top count articles (the grid's Count is the number of articles).
+            var page = await Reports.GetStockReportAsync(filter, args.Skip ?? 0, args.Top ?? 10);
+            if (version != loadVersion) return;
+            rows = page.Rows;
+            count = page.TotalCount;
+            totalValue = page.TotalValue;
+            totalPieces = page.TotalPieces;
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task OpenProductAsync(StockReportRow r)
+    {
+        await Dialogs.OpenAsync<ProductDialog>("Edit product",
+            new Dictionary<string, object?> { [nameof(ProductDialog.ProductId)] = r.ProductId },
+            new DialogOptions { Width = "760px" });
+        await grid.Reload();
+    }
+
+    private async Task ExportAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var all = await Reports.GetStockReportAsync(filter, 0, int.MaxValue);
+            var lines = new List<object?[]> { new object?[] { "Article no", "Barcode", "Colour", "Size", "Company", "Product", "Pack", "Category", "Sub-category", "In stock", "Cost", "Sale price", "Value" } };
+            lines.AddRange(all.Rows.Select(r => new object?[]
+                { r.ArticleNo, r.Barcode, r.Colour, r.Size, r.Company, r.Name, r.PackSize, r.Category, r.SubCategory, r.OnHand,
+                  r.PurchasePrice, r.SalePrice, r.StockValue }));
+
+            var path = await Desktop.SaveTextFileAsync($"Stock {DateTime.Today:yyyy-MM-dd}.csv", "CSV files (*.csv)|*.csv", Csv(lines));
+            if (path is not null)
+                Toast(NotificationSeverity.Success, $"Saved to {path}");
+        });
+    }
+}

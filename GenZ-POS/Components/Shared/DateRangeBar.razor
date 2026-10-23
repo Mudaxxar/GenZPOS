@@ -1,0 +1,63 @@
+@* From / To date boxes plus quick presets (Today, This month …). Raises Changed after any change.
+   Use like:  <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" /> *@
+
+<RadzenFormField Text="Period" Style="width:150px">
+    <RadzenDropDown TValue="string" Value="@preset" ValueChanged="@((string p) => ApplyPresetAsync(p))"
+                    Data="@Presets" Placeholder="Custom" />
+</RadzenFormField>
+<DateBox Label="From" Value="@From" ValueChanged="@((DateTime d) => SetAsync(d, To))" Style="width:150px" />
+<DateBox Label="To" Value="@To" ValueChanged="@((DateTime d) => SetAsync(From, d))" Style="width:150px" />
+
+@code {
+    [Parameter] public DateTime From { get; set; }
+    [Parameter] public EventCallback<DateTime> FromChanged { get; set; }
+    [Parameter] public DateTime To { get; set; }
+    [Parameter] public EventCallback<DateTime> ToChanged { get; set; }
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private static readonly string[] Presets =
+        ["Today", "Yesterday", "This week", "This month", "Last month", "Last 30 days", "This year", "All time"];
+
+    private string? preset;
+
+    protected override void OnParametersSet() => preset ??= Detect(From, To);
+
+    private async Task ApplyPresetAsync(string p)
+    {
+        var t = DateTime.Today;
+        var monthStart = new DateTime(t.Year, t.Month, 1);
+        var (from, to) = p switch
+        {
+            "Today" => (t, t),
+            "Yesterday" => (t.AddDays(-1), t.AddDays(-1)),
+            "This week" => (t.AddDays(-(((int)t.DayOfWeek + 6) % 7)), t), // Monday-based
+            "This month" => (monthStart, t),
+            "Last month" => (monthStart.AddMonths(-1), monthStart.AddDays(-1)),
+            "Last 30 days" => (t.AddDays(-29), t),
+            "This year" => (new DateTime(t.Year, 1, 1), t),
+            _ => (new DateTime(2000, 1, 1), t),
+        };
+        await SetAsync(from, to, p);
+    }
+
+    private async Task SetAsync(DateTime from, DateTime to, string? fromPreset = null)
+    {
+        if (to < from) (from, to) = (to, from);
+        From = from;
+        To = to;
+        preset = fromPreset ?? Detect(from, to);
+        await FromChanged.InvokeAsync(from);
+        await ToChanged.InvokeAsync(to);
+        await Changed.InvokeAsync();
+    }
+
+    private static string? Detect(DateTime from, DateTime to)
+    {
+        var t = DateTime.Today;
+        var monthStart = new DateTime(t.Year, t.Month, 1);
+        if (from == t && to == t) return "Today";
+        if (from == monthStart && to == t) return "This month";
+        if (from == new DateTime(t.Year, 1, 1) && to == t) return "This year";
+        return null; // custom range
+    }
+}

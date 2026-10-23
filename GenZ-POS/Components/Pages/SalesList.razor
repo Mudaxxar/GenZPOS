@@ -1,0 +1,176 @@
+@page "/sales"
+@attribute [Authorize(Policy = Permissions.SalesView)]
+@inherits PageBase
+@inject SaleService Sales
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Sales</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Visible="@Can(Permissions.PaymentsReceive)" Text="Receive payment" Icon="payments" ButtonStyle="ButtonStyle.Secondary" Click="@(() => Nav.NavigateTo("payments"))" />
+        <RadzenButton Visible="@Can(Permissions.SalesCreate)" Text="New sale" Icon="point_of_sale" Click="@(() => Nav.NavigateTo("sales/new"))" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" />
+        <RadzenFormField Text="Customer" Style="width:240px">
+            <RadzenDropDown TValue="int?" @bind-Value="customerId" @bind-Value:after="ReloadAsync" Data="@customers" TextProperty="Label" ValueProperty="Id"
+                            AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="All customers" />
+        </RadzenFormField>
+        <RadzenFormField Text="Payment" Style="width:280px">
+            <RadzenDropDown TValue="SalePayFilter" @bind-Value="payFilter" @bind-Value:after="ReloadAsync" Data="@payOptions" TextProperty="Text" ValueProperty="Value" />
+        </RadzenFormField>
+        <RadzenFormField Text="Invoice #, customer or phone" Style="flex:1; min-width:200px">
+            <RadzenTextBox @bind-Value="search" @bind-Value:after="ReloadAsync" />
+        </RadzenFormField>
+    </RadzenStack>
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Invoices: <strong>@count</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Total: <strong>@Money(sumTotal)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Paid at counter: <strong>@Money(sumPaid)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Sold on credit:
+            <strong style="@(sumTotal - sumPaid > 0 ? "color:var(--rz-danger)" : null)">@Money(sumTotal - sumPaid)</strong>
+        </RadzenText>
+    </RadzenStack>
+
+    <RadzenDataGrid @ref="grid" TItem="Sale" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                    AllowPaging="true" PageSize="20" ShowPagingSummary="true" Density="Density.Compact"
+                    EmptyText="No invoices match these filters."
+                    RowDoubleClick="@(a => Nav.NavigateTo($"sales/{a.Data!.Id}"))">
+        <Columns>
+            <RadzenDataGridColumn Property="Id" Title="Invoice #" Width="100px" />
+            <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.SaleDate)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Customer">
+                <Template>
+                    @context.Customer?.Name
+                    @if (!string.IsNullOrEmpty(context.Customer?.Phone))
+                    {
+                        <span style="opacity:.65"> · @context.Customer.Phone</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Total" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Total)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Paid at counter" Width="135px" TextAlign="TextAlign.Right"><Template>@Money(context.Paid)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="On credit" Width="125px" TextAlign="TextAlign.Right">
+                <Template><span style="@(context.Due > 0 ? "color:var(--rz-danger)" : null)">@Money(context.Due)</span></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="At counter" Width="105px" TextAlign="TextAlign.Center">
+                <Template><PayStatusBadge Total="@context.Total" Paid="@context.Paid" /></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Width="110px" TextAlign="TextAlign.Right">
+                <Template>
+                    <RadzenButton Icon="visibility" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Open invoice" Click="@(() => Nav.NavigateTo($"sales/{context.Id}"))" />
+                    <RadzenButton Visible="@Can(Permissions.SalesDelete)" Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+    <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2" Style="display:block;opacity:.75">
+        "At counter" shows what was paid when the invoice was made. Later payments go to the customer's balance (see Customer ledger), not to a specific invoice.
+    </RadzenText>
+</RadzenCard>
+
+@code {
+    // Customer payments aren't allocated to invoices, so this filter is only about money taken at the counter.
+    public enum SalePayFilter { All, Credit, PaidInFull }
+
+    private record PayOption(SalePayFilter Value, string Text);
+    private record CustomerOption(int Id, string Label);
+
+    private static readonly PayOption[] payOptions =
+    [
+        new(SalePayFilter.All, "All"),
+        new(SalePayFilter.Credit, "Credit sales (not fully paid at counter)"),
+        new(SalePayFilter.PaidInFull, "Paid in full at counter"),
+    ];
+
+    private RadzenDataGrid<Sale> grid = default!;
+    private List<Sale>? rows; // null until first load → Radzen calls LoadData right after first render
+    private List<CustomerOption> customers = [];
+    private int count, loadVersion;
+    private bool loading = true;
+    private decimal sumTotal, sumPaid;
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+    private int? customerId;
+    private SalePayFilter payFilter = SalePayFilter.All;
+    private string? search;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            customers = await db.Customers.AsNoTracking()
+                .OrderBy(c => c.Id == Customer.WalkInId ? 0 : 1).ThenBy(c => c.Name)
+                .Select(c => new CustomerOption(c.Id, c.Phone == null ? c.Name : c.Name + " (" + c.Phone + ")"))
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            await LoadPageAsync(args, version);
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task LoadPageAsync(LoadDataArgs args, int version)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var end = to.Date.AddDays(1);
+        var q = db.Sales.AsNoTracking().Where(s => s.SaleDate >= from.Date && s.SaleDate < end);
+        if (customerId is not null) q = q.Where(s => s.CustomerId == customerId);
+        q = payFilter switch
+        {
+            SalePayFilter.Credit => q.Where(s => s.Total > s.Paid),
+            SalePayFilter.PaidInFull => q.Where(s => s.Total <= s.Paid),
+            _ => q,
+        };
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            q = int.TryParse(s, out var no)
+                ? q.Where(x => x.Id == no || x.Customer!.Name.Contains(s) || (x.Customer.Phone != null && x.Customer.Phone.Contains(s)))
+                : q.Where(x => x.Customer!.Name.Contains(s) || (x.Customer.Phone != null && x.Customer.Phone.Contains(s)));
+        }
+
+        var totals = await q.GroupBy(_ => 1)
+            .Select(g => new { Count = g.Count(), Total = g.Sum(x => x.Total), Paid = g.Sum(x => x.Paid) })
+            .FirstOrDefaultAsync();
+        var page = await q.Include(x => x.Customer).OrderByDescending(x => x.SaleDate).ThenByDescending(x => x.Id)
+            .Skip(args.Skip ?? 0).Take(args.Top ?? 20).ToListAsync();
+
+        if (version != loadVersion) return;
+        count = totals?.Count ?? 0;
+        sumTotal = totals?.Total ?? 0;
+        sumPaid = totals?.Paid ?? 0;
+        rows = page;
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task DeleteAsync(Sale s)
+    {
+        if (!await ConfirmAsync($"Delete invoice #{s.Id}? Its stock goes back and it is removed from the customer's ledger.")) return;
+        if (await RunAsync(() => Sales.DeleteAsync(s.Id), "Invoice deleted"))
+            await grid.Reload();
+    }
+}

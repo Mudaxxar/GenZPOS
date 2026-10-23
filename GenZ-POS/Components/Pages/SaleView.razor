@@ -1,0 +1,357 @@
+@page "/sales/{Id:int}"
+@attribute [Authorize(Policy = Permissions.SalesView)]
+@inherits PageBase
+@inject SaleService Sales
+@inject ReportService Reports
+@inject DesktopService Desktop
+@inject SaleReturnService SaleReturns
+@inject ShopInfo Shop
+
+@if (loading)
+{
+    <RadzenStack AlignItems="AlignItems.Center" class="rz-p-8">
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+        <RadzenText TextStyle="TextStyle.Body2">Loading invoice…</RadzenText>
+    </RadzenStack>
+}
+else if (error is not null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Title="Couldn't open this invoice">
+        @error
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" class="rz-mt-2">
+            <RadzenButton Text="Try again" Icon="refresh" Size="ButtonSize.Small" Click="LoadAsync" />
+            <RadzenButton Text="All sales" Icon="list" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("sales"))" />
+        </RadzenStack>
+    </RadzenAlert>
+}
+else if (sale is null)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Title="Invoice not found">
+        Invoice #@Id doesn't exist. It may have been deleted.
+        <div class="rz-mt-2">
+            <RadzenButton Text="All sales" Icon="list" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("sales"))" />
+        </div>
+    </RadzenAlert>
+}
+else
+{
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" class="no-print rz-mb-3">
+        <RadzenButton Text="Print receipt" Icon="receipt_long" Click="OpenReceipt" />
+        <RadzenButton Text="Print A4" Icon="print" ButtonStyle="ButtonStyle.Light" Click="PrintA4Async" />
+        <RadzenButton Visible="@Can(Permissions.SalesCreate)" Text="New sale  (F2)" Icon="point_of_sale" ButtonStyle="ButtonStyle.Secondary" Click="@(() => Nav.NavigateTo("sales/new"))" data-hotkey="F2" />
+        <RadzenButton Text="All sales" Icon="list" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("sales"))" />
+        @if (canReturn)
+        {
+            <RadzenButton Visible="@Can(Permissions.SaleReturnsManage)" Text="Return items" Icon="assignment_return" ButtonStyle="ButtonStyle.Warning" Variant="Variant.Outlined" Click="@(() => Nav.NavigateTo($"sales/{sale.Id}/return"))" />
+        }
+        @if (!IsWalkIn)
+        {
+            <RadzenButton Visible="@Can(Permissions.CustomersManage)" Text="Customer ledger" Icon="menu_book" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo($"ledger/{sale.CustomerId}"))" />
+        }
+        <RadzenButton Visible="@Can(Permissions.SalesDelete)" Text="Delete" Icon="delete" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" IsBusy="Busy" Click="DeleteAsync" Style="margin-left:auto" />
+    </RadzenStack>
+
+    @* This screen prints the A4 invoice; the receipt preview beside it is printed from its own page (SaleReceiptPrint). *@
+    <div class="sale-docs print-a4">
+    <RadzenCard class="invoice" Style="max-width:820px; flex:1 1 520px">
+        @* Shop block *@
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Start" class="invoice-head">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem">
+                @if (Shop.LogoDataUri is { } logo)
+                {
+                    <img src="@logo" alt="@Shop.Name" class="invoice-logo" />
+                }
+                <div>
+                    @if (Shop.PrintName)
+                    {
+                        <RadzenText TextStyle="TextStyle.H5" class="rz-m-0" Style="font-weight:600">@Shop.Name</RadzenText>
+                    }
+                    @if (!string.IsNullOrEmpty(Shop.Address)) { <div class="invoice-muted" style="white-space:pre-line">@Shop.Address</div> }
+                    @if (!string.IsNullOrEmpty(Shop.Phone)) { <div class="invoice-muted">Mobile: @Shop.Phone</div> }
+                </div>
+            </RadzenStack>
+            <div style="text-align:right">
+                <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">SALES INVOICE</RadzenText>
+                <div>Invoice # <strong>@sale.Id</strong></div>
+                <div>Date: <strong>@Date(sale.SaleDate)</strong></div>
+            </div>
+        </RadzenStack>
+
+        <hr class="invoice-rule" />
+
+        @* Customer block *@
+        <div class="invoice-customer">
+            <div><span class="invoice-muted">Bill to:</span> <strong>@sale.Customer?.Name</strong></div>
+            @if (!string.IsNullOrEmpty(sale.Customer?.Phone)) { <div><span class="invoice-muted">Phone:</span> @sale.Customer.Phone</div> }
+            @if (!IsWalkIn && !string.IsNullOrEmpty(sale.Customer?.Address)) { <div><span class="invoice-muted">Address:</span> @sale.Customer.Address</div> }
+        </div>
+
+        @* Lines *@
+        <table class="invoice-lines rz-mt-2">
+            <thead>
+                <tr>
+                    <th style="width:6%">#</th>
+                    <th>Item</th>
+                    <th style="width:10%" class="money">Qty</th>
+                    <th style="width:15%" class="money">Rate</th>
+                    <th style="width:17%" class="money">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < sale.Lines.Count; i++)
+                {
+                    var l = sale.Lines[i];
+                    <tr>
+                        <td>@(i + 1)</td>
+                        <td>
+                            <div>@l.StockItem?.Product?.Name</div>
+                            <div class="invoice-muted" style="font-size:.85em">@string.Join(" · ", new[] { l.StockItem?.ArticleNo, l.StockItem?.Barcode, l.StockItem?.Colour, l.StockItem?.Size is { Length: > 0 } sz ? $"Size {sz}" : null }.Where(s => !string.IsNullOrWhiteSpace(s)))</div>
+                        </td>
+                        <td class="money">@Qty(l.Qty)</td>
+                        <td class="money">@Money(l.Rate)</td>
+                        <td class="money">@Money(l.Amount)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        @if (Exchange is not null)
+        {
+            @* Exchange: what the customer brought back (saved as return(s) with this invoice). *@
+            <div class="rz-mt-3"><strong>Returned items (exchange)</strong></div>
+            <table class="invoice-lines rz-mt-1">
+                <thead>
+                    <tr>
+                        <th style="width:6%">#</th>
+                        <th>Item returned</th>
+                        <th style="width:10%" class="money">Qty</th>
+                        <th style="width:15%" class="money">Rate</th>
+                        <th style="width:17%" class="money">Refund</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var n = 0; }
+                    @foreach (var r in sale.ExchangeReturns)
+                    {
+                        @foreach (var l in r.Lines)
+                        {
+                            n++;
+                            <tr>
+                                <td>@n</td>
+                                <td>
+                                    <div>@string.Join(" · ", new[] { l.StockItem?.ArticleNo, l.StockItem?.Barcode, l.StockItem?.Colour, l.StockItem?.Size is { Length: > 0 } sz ? $"Size {sz}" : null }.Where(s => !string.IsNullOrWhiteSpace(s)))</div>
+                                    <div class="invoice-muted" style="font-size:.85em">@l.StockItem?.Product?.Name · from invoice #@r.SaleId · return #@r.Id</div>
+                                </td>
+                                <td class="money">@Qty(l.Qty)</td>
+                                <td class="money">
+                                    @Money(l.Rate)
+                                    @if (l.Amount < Math.Round(l.Qty * l.Rate, 2)) { <div class="invoice-muted" style="font-size:.8em">less invoice discount</div> }
+                                </td>
+                                <td class="money">- @Money(l.Amount)</td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        }
+
+        @* Totals (khata style for credit customers: previous balance → paid → new balance) *@
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Start" Wrap="FlexWrap.Wrap" Gap="1rem" class="rz-mt-3">
+            <div style="flex:1; min-width:200px">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                    <span class="invoice-muted">At counter:</span>
+                    <PayStatusBadge Total="@sale.Total" Paid="@sale.Paid" />
+                </RadzenStack>
+                @if (!string.IsNullOrEmpty(sale.Notes))
+                {
+                    <div class="rz-mt-2"><span class="invoice-muted">Notes:</span> @sale.Notes</div>
+                }
+            </div>
+            <div class="invoice-totals">
+                <TotalLine Label="Sub total" Value="@Money(sale.SubTotal)" />
+                @if (sale.Discount > 0) { <TotalLine Label="Discount" Value="@("- " + Money(sale.Discount))" /> }
+                <TotalLine Label="Invoice total" Value="@Money(sale.Total)" Strong="true" />
+                @if (Exchange is { } ex)
+                {
+                    <TotalLine Label="Returned items" Value="@("- " + Money(ex.Returned))" />
+                    <TotalLine Label="@(ex.Net >= 0 ? "To pay" : "To give back")" Value="@Money(Math.Abs(ex.Net))" Strong="true" />
+                    @if (ex.Net >= 0)
+                    {
+                        <TotalLine Label="Paid now" Value="@Money(ex.PaidNow)" />
+                        if (sale.Due > 0) { <TotalLine Label="Due" Value="@Money(sale.Due)" Danger="true" /> }
+                    }
+                    else
+                    {
+                        <TotalLine Label="Cash given back" Value="@Money(ex.CashBack)" />
+                        if (ex.Credit > 0) { <TotalLine Label="Kept as credit" Value="@Money(ex.Credit)" /> }
+                    }
+                    if (!IsWalkIn)
+                    {
+                        <hr class="invoice-rule" />
+                        <TotalLine Label="Previous balance" Value="@Money(previousBalance)" />
+                        <TotalLine Label="New balance" Value="@Money(NewBalance)" Strong="true" Danger="@(NewBalance > 0)" />
+                    }
+                }
+                else if (IsWalkIn)
+                {
+                    <TotalLine Label="Paid" Value="@Money(sale.Paid)" />
+                    if (sale.Due > 0)
+                    {
+                        <TotalLine Label="Due" Value="@Money(sale.Due)" Danger="true" />
+                    }
+                }
+                else
+                {
+                    <hr class="invoice-rule" />
+                    <TotalLine Label="Previous balance" Value="@Money(previousBalance)" />
+                    <TotalLine Label="Total payable" Value="@Money(previousBalance + sale.Total)" />
+                    <TotalLine Label="Paid now" Value="@Money(sale.Paid)" />
+                    <TotalLine Label="New balance" Value="@Money(NewBalance)" Strong="true" Danger="@(NewBalance > 0)" />
+                }
+            </div>
+        </RadzenStack>
+
+        @if (!IsWalkIn && balanceToday != NewBalance)
+        {
+            <RadzenText TextStyle="TextStyle.Caption" class="no-print rz-mt-2" Style="display:block">
+                Customer's balance today (after later invoices/payments): <strong>@Money(balanceToday)</strong>
+            </RadzenText>
+        }
+
+        <div class="invoice-foot">
+            @if (!string.IsNullOrEmpty(Shop.InvoiceFooter))
+            {
+                <div style="white-space:pre-line">@Shop.InvoiceFooter</div>
+            }
+            else
+            {
+                <div>Thank you for your business!</div>
+                <div class="invoice-muted">Goods once sold are not returnable without this invoice.</div>
+            }
+        </div>
+    </RadzenCard>
+
+    <div class="receipt-preview">
+        <div class="receipt-preview-label no-print">Receipt (@(Receipt58 ? "58" : "80") mm)</div>
+        <SaleReceipt Sale="@sale" PreviousBalance="@previousBalance" Width58="@Receipt58" />
+    </div>
+    </div>
+
+    @if (returns.Count > 0)
+    {
+        <RadzenCard class="no-print rz-mt-3" Style="max-width:820px">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Returns against this invoice</RadzenText>
+            <table class="invoice-lines">
+                <thead>
+                    <tr>
+                        <th style="width:18%">Date</th>
+                        <th style="width:14%">Return #</th>
+                        <th class="money">Amount</th>
+                        <th class="money">Cash refunded</th>
+                        <th class="money">Credited to balance</th>
+                        <th style="width:10%"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in returns)
+                    {
+                        <tr>
+                            <td>@Date(r.ReturnDate)</td>
+                            <td>@r.Id</td>
+                            <td class="money">@Money(r.Total)</td>
+                            <td class="money">@Money(r.Refunded)</td>
+                            <td class="money">@Money(r.Total - r.Refunded)</td>
+                            <td style="text-align:right"><RadzenLink Path="@($"sale-returns/{r.Id}")" Text="Open" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2" Style="display:block">
+                Returned in total: <strong>@Money(returns.Sum(r => r.Total))</strong>.
+                The invoice can't be deleted while it has returns.
+            </RadzenText>
+        </RadzenCard>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    /// <summary>?print=true (from "Save &amp; Print" on the sale screen) opens the print dialog once the invoice is shown.</summary>
+    [SupplyParameterFromQuery(Name = "print")] public bool AutoPrint { get; set; }
+    private bool autoPrinted;
+
+    private bool Receipt58 => Shop.PrintFormat == PrintFormat.Receipt58;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!AutoPrint || autoPrinted || loading || sale is null) return;
+        autoPrinted = true;
+        // Save & Print: the shop's paper. A receipt opens its print screen (printer list + Print button; never prints by itself).
+        if (Shop.PrintFormat == PrintFormat.A4) await PrintA4Async();
+        else OpenReceipt();
+    }
+
+    /// <summary>The receipt print screen: choose / check the printer there, then press Print.</summary>
+    private void OpenReceipt() =>
+        Nav.NavigateTo($"sales/{Id}/receipt?w={(Receipt58 ? 58 : 80)}", replace: AutoPrint); // Back from it must not land on ?print=true again
+
+    private async Task PrintA4Async()
+    {
+        await Task.Delay(300); // let it finish painting before the print preview captures it
+        await Desktop.PrintAsync();
+    }
+
+    private Sale? sale;
+    private List<SaleReturn> returns = [];
+    private bool canReturn;
+    private decimal previousBalance, balanceToday;
+    private bool loading = true;
+    private string? error;
+
+    private bool IsWalkIn => sale?.CustomerId == Customer.WalkInId;
+    private decimal NewBalance => previousBalance + (sale?.Due ?? 0) - (Exchange?.Credit ?? 0);
+    private ExchangeSummary? Exchange => sale is null ? null : ExchangeSummary.Of(sale);
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            sale = await Sales.GetAsync(Id);
+            returns = [];
+            canReturn = false;
+            if (sale is not null)
+            {
+                returns = await Sales.GetReturnsAsync(sale.Id);
+                canReturn = (await SaleReturns.GetReturnableAsync(sale.Id)).Any(l => l.Returnable > 0);
+            }
+            if (sale is not null && sale.CustomerId != Customer.WalkInId)
+            {
+                previousBalance = await Sales.GetBalanceBeforeAsync(sale);
+                balanceToday = await Reports.GetCustomerBalanceAsync(sale.CustomerId);
+            }
+        }
+        catch (Exception ex)
+        {
+            sale = null;
+            error = FriendlyMessage(ex);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (sale is null) return;
+        var saleId = sale.Id;
+        if (!await ConfirmAsync($"Delete invoice #{saleId}? Its stock goes back and it is removed from the customer's ledger.")) return;
+        if (await RunAsync(() => Sales.DeleteAsync(saleId), "Invoice deleted"))
+            Nav.NavigateTo("sales");
+    }
+}

@@ -1,0 +1,6 @@
+/* Barcode in the panel: automatic and read-only, so it looks like a value, not an input. */
+::deep .readonly-field input {
+    background: var(--rz-base-100);
+    cursor: default;
+    font-weight: 600;
+}

@@ -1,0 +1,27 @@
+@inject DialogService Dialogs
+
+@* Small "enter a name" dialog used for quick-adding a company / sub-category from other forms.
+   Closes with the trimmed name, or null if cancelled. *@
+<RadzenTemplateForm TItem="NameModel" Data="@model" Submit="@(() => Dialogs.Close(model.Name.Trim()))">
+    <RadzenStack Gap="1rem">
+        <RadzenFormField Text="@Label" Style="width:100%">
+            <RadzenTextBox Name="Name" @bind-Value="model.Name" autofocus />
+        </RadzenFormField>
+        <RadzenRequiredValidator Component="Name" Text="Please enter a name" />
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
+            <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(null))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Text="Add" Icon="add" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public string Label { get; set; } = "Name";
+
+    private readonly NameModel model = new();
+
+    private class NameModel
+    {
+        public string Name { get; set; } = "";
+    }
+}

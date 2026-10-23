@@ -1,0 +1,178 @@
+@page "/purchases/{Id:int}/labels"
+@attribute [Authorize(Policy = Permissions.PurchasesManage)]
+@inherits PageBase
+@inject PurchaseService Purchases
+@inject AppConfig Config
+@inject ShopInfo Shop
+
+@* Barcode labels for a purchase (like BarTender, printed by GenZ-POS itself: Services/LabelPrinter.cs). One label per
+   piece (one barcode per piece); tick the ones to print, copies per piece, pick this PC's label printer (remembered in
+   appsettings.json), Print. Opens after saving a new purchase; also from Purchases → Labels. Never prints by itself. *@
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Labels · Purchase #@Id</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center">
+        <RadzenDropDown TValue="string" Data="@printers" @bind-Value="printer" @bind-Value:after="PrinterChanged"
+                        Placeholder="Choose label printer" Style="width:240px" title="This PC's label printer (remembered)" />
+        <RadzenButton Text="@($"Print {TotalLabels} label(s)  (F9)")" Icon="print" IsBusy="@printing" Click="PrintAsync"
+                      Disabled="@(printer is null || TotalLabels == 0)" data-hotkey="F9" />
+        <RadzenButton Text="Done" Icon="check" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases"))" />
+    </RadzenStack>
+</RadzenStack>
+
+@if (message is not null)
+{
+    <RadzenAlert AlertStyle="@(messageIsError ? AlertStyle.Danger : AlertStyle.Success)" Variant="Variant.Flat" Shade="Shade.Lighter"
+                 AllowClose="false" class="rz-mb-2">@message</RadzenAlert>
+}
+
+@if (rows is null)
+{
+    <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Style="height:4px" />
+}
+else
+{
+    <RadzenRow Gap="1rem">
+        <RadzenColumn Size="12" SizeLG="8">
+            <RadzenCard>
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" class="rz-mb-2" Wrap="FlexWrap.Wrap">
+                    <RadzenButton Text="Tick all" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => SetAll(true))" />
+                    <RadzenButton Text="Untick all" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => SetAll(false))" />
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" Style="opacity:.7">
+                        Label @Shop.LabelDesign.WidthMm.ToString("0.#") × @Shop.LabelDesign.HeightMm.ToString("0.#") mm · click a row to preview it
+                    </RadzenText>
+                </RadzenStack>
+                <RadzenDataGrid TItem="LabelRow" Data="@rows" Density="Density.Compact" AllowPaging="false"
+                                RowClick="@(a => selected = a.Data)" RowRender="@(a => { if (a.Data == selected) a.Attributes["class"] = "label-row-selected"; })"
+                                EmptyText="This purchase has no items.">
+                    <Columns>
+                        <RadzenDataGridColumn Width="50px" TextAlign="TextAlign.Center">
+                            <Template><RadzenCheckBox TValue="bool" @bind-Value="context.Print" /></Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Article · Barcode" Width="200px">
+                            <Template>
+                                <strong>@context.Label.ArticleNo · @context.Label.Barcode</strong>
+                                <div style="font-size:.8rem; opacity:.7">@context.Label.ProductName</div>
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Colour" Width="110px"><Template>@context.Label.Colour</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Size" Width="70px"><Template><strong>@context.Label.Size</strong></Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Price" Width="110px" TextAlign="TextAlign.Right"><Template>@LabelPrinter.PriceText(context.Label.Price)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Copies" Width="100px">
+                            <Template>
+                                <RadzenNumeric TValue="int" @bind-Value="context.Copies" Min="1" Max="100" ShowUpDown="true" Style="width:100%" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenCard>
+        </RadzenColumn>
+        <RadzenColumn Size="12" SizeLG="4">
+            @if ((selected ?? rows.FirstOrDefault()) is { } shown)
+            {
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-mb-1" Style="display:block; text-transform:uppercase; opacity:.6">Preview</RadzenText>
+                <LabelCanvas Design="@Shop.LabelDesign" Label="@shown.Label" PxPerMm="@Math.Min(2.2, 300 / Shop.LabelDesign.HeightMm)" />
+                @if (Can(Permissions.SettingsManage))
+                {
+                    <RadzenButton Text="Design label…" Icon="design_services" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" class="rz-mt-2"
+                                  Click="@(() => Nav.NavigateTo("settings/label-design"))" />
+                }
+            }
+        </RadzenColumn>
+    </RadzenRow>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private sealed class LabelRow(LabelData label, int copies)
+    {
+        public LabelData Label { get; } = label;
+        public bool Print { get; set; } = true;
+        public int Copies { get; set; } = copies;
+    }
+
+    private List<LabelRow>? rows;
+    private LabelRow? selected;
+    private IReadOnlyList<string> printers = [];
+    private string? printer, message;
+    private bool printing, messageIsError;
+
+    private int TotalLabels => rows?.Where(r => r.Print).Sum(r => Math.Max(1, r.Copies)) ?? 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        printers = ReceiptPrinter.InstalledPrinters();
+        printer = printers.FirstOrDefault(p => string.Equals(p, Config.LabelPrinter, StringComparison.OrdinalIgnoreCase));
+        try
+        {
+            var purchase = await Purchases.GetAsync(Id);
+            if (purchase is null)
+            {
+                Show($"Purchase #{Id} was not found.", isError: true);
+                rows = [];
+                return;
+            }
+            // One row per piece (stock item); a line of several (older bills) = that many copies of its barcode.
+            rows = purchase.Lines
+                .Where(l => l.StockItem is not null)
+                .GroupBy(l => l.StockItemId)
+                .Select(g =>
+                {
+                    var item = g.First().StockItem!;
+                    var label = new LabelData(item.Barcode, item.ArticleNo, item.Product?.Name ?? "", item.Colour, item.Size, item.SalePrice);
+                    return new LabelRow(label, Math.Max(1, (int)Math.Round(g.Sum(l => l.Qty))));
+                })
+                .ToList();
+            if (printer is null)
+                Show("Choose this PC's label printer at the top (e.g. your 4BARCODE / TD printer), then press Print.", isError: true);
+        }
+        catch (Exception ex)
+        {
+            rows = [];
+            Show(FriendlyMessage(ex), isError: true);
+        }
+    }
+
+    private void SetAll(bool print)
+    {
+        foreach (var r in rows ?? []) r.Print = print;
+    }
+
+    /// <summary>Remembers the chosen label printer for this PC (appsettings.json).</summary>
+    private void PrinterChanged()
+    {
+        Config.LabelPrinter = printer;
+        message = null;
+        try { Config.Save(); }
+        catch (Exception ex) { AppLog.Warn("Could not save the label printer to appsettings.json", ex); }
+    }
+
+    private async Task PrintAsync()
+    {
+        if (rows is null || printer is null || printing) return;
+        var labels = rows.Where(r => r.Print).SelectMany(r => Enumerable.Repeat(r.Label, Math.Max(1, r.Copies))).ToList();
+        printing = true;
+        message = null;
+        try
+        {
+            var (d, p) = (Shop.LabelDesign, printer);
+            var problem = await Task.Run(() => LabelPrinter.Print(labels, d, Shop, p)); // GDI off the UI thread
+            if (problem is null) Show($"{labels.Count} label(s) sent to {printer}.", isError: false);
+            else Show(problem, isError: true);
+        }
+        catch (Exception ex)
+        {
+            Show(FriendlyMessage(ex), isError: true);
+        }
+        finally
+        {
+            printing = false;
+        }
+    }
+
+    private void Show(string text, bool isError)
+    {
+        message = text;
+        messageIsError = isError;
+    }
+}

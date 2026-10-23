@@ -1,0 +1,127 @@
+@page "/companies"
+@attribute [Authorize(Policy = Permissions.CatalogManage)]
+@inherits PageBase
+
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Companies (Brands)</RadzenText>
+
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeMD="4">
+        <RadzenCard>
+            <RadzenTemplateForm TItem="Company" Data="@model" Submit="SaveAsync">
+                <RadzenStack Gap="1rem">
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@(model.Id == 0 ? "New company" : "Edit company")</RadzenText>
+                    <RadzenFormField Text="Name">
+                        <RadzenTextBox Name="Name" @bind-Value="model.Name" MaxLength="100" />
+                    </RadzenFormField>
+                    <RadzenDataAnnotationValidator Component="Name" />
+                    <RadzenFormField Text="Phone">
+                        <RadzenTextBox Name="Phone" @bind-Value="model.Phone" MaxLength="30" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Notes">
+                        <RadzenTextArea Name="Notes" @bind-Value="model.Notes" Rows="2" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenCheckBox Name="IsActive" @bind-Value="model.IsActive" /> <RadzenLabel Text="Active" Component="IsActive" />
+                    </RadzenStack>
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                        <RadzenButton ButtonType="ButtonType.Submit" Text="Save" Icon="save" IsBusy="Busy" />
+                        <RadzenButton Text="Clear" ButtonStyle="ButtonStyle.Light" Click="Reset" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenTemplateForm>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeMD="8">
+        <RadzenCard>
+            <RadzenTextBox Placeholder="Search…" @bind-Value="search" @bind-Value:after="LoadAsync" class="rz-mb-2" Style="width:100%" />
+            <RadzenDataGrid TItem="Company" Data="@items" AllowPaging="true" PageSize="15" AllowSorting="true" IsLoading="@loading"
+                            Density="Density.Compact" EmptyText="@(string.IsNullOrWhiteSpace(search) ? "No companies yet." : "No companies match.")"
+                            RowDoubleClick="@(a => Edit(a.Data!))">
+                <Columns>
+                    <RadzenDataGridColumn Property="Name" Title="Name" />
+                    <RadzenDataGridColumn Property="Phone" Title="Phone" Width="160px" />
+                    <RadzenDataGridColumn Title="Active" Width="90px"><Template>@(context.IsActive ? "Yes" : "No")</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="110px" Sortable="false" TextAlign="TextAlign.Right">
+                        <Template>
+                            <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => Edit(context))" />
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" Click="@(() => DeleteAsync(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private Company model = new();
+    private List<Company> items = [];
+    private string? search;
+    private bool loading;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = db.Companies.AsNoTracking();
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.Trim();
+                q = q.Where(c => c.Name.Contains(s) || (c.Phone != null && c.Phone.Contains(s)));
+            }
+            items = await q.OrderBy(c => c.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void Edit(Company c) => model = new Company { Id = c.Id, Name = c.Name, Phone = c.Phone, Notes = c.Notes, IsActive = c.IsActive };
+
+    private void Reset() => model = new();
+
+    private async Task SaveAsync()
+    {
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                // Save a copy so a failed insert can't leave the form's model with an Id set.
+                var entity = new Company
+                {
+                    Id = model.Id,
+                    Name = model.Name.Trim(),
+                    Phone = string.IsNullOrWhiteSpace(model.Phone) ? null : model.Phone.Trim(),
+                    Notes = string.IsNullOrWhiteSpace(model.Notes) ? null : model.Notes.Trim(),
+                    IsActive = model.IsActive,
+                };
+                if (entity.Id == 0) db.Companies.Add(entity); else db.Companies.Update(entity);
+                await db.SaveChangesAsync();
+            }, "Company saved"))
+        {
+            Reset();
+            await LoadAsync();
+        }
+    }
+
+    private async Task DeleteAsync(Company c)
+    {
+        if (!await ConfirmAsync($"Delete company \"{c.Name}\"?")) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                db.Companies.Remove(new Company { Id = c.Id });
+                await db.SaveChangesAsync();
+            }, "Deleted"))
+            await LoadAsync();
+    }
+}

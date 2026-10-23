@@ -1,0 +1,107 @@
+@inherits PageBase
+
+@if (model is null)
+{
+    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+}
+else
+{
+    <RadzenTemplateForm TItem="Customer" Data="@model" Submit="SaveAsync">
+        <RadzenStack Gap="1rem">
+            <RadzenFormField Text="Name *" Style="width:100%">
+                <RadzenTextBox Name="Name" @bind-Value="model.Name" MaxLength="120" />
+            </RadzenFormField>
+            <RadzenDataAnnotationValidator Component="Name" />
+
+            <RadzenRow Gap="1rem">
+                <RadzenColumn Size="6">
+                    <RadzenFormField Text="Phone" Style="width:100%">
+                        <RadzenTextBox Name="Phone" @bind-Value="model.Phone" MaxLength="30" />
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="6">
+                    <RadzenFormField Text="Type" Style="width:100%">
+                        <RadzenDropDown TValue="CustomerType" OpenOnFocus="true" Name="Type" @bind-Value="model.Type" Data="@types" Disabled="@isWalkIn" />
+                    </RadzenFormField>
+                </RadzenColumn>
+            </RadzenRow>
+
+            <RadzenFormField Text="Address" Style="width:100%">
+                <RadzenTextArea Name="Address" @bind-Value="model.Address" Rows="2" MaxLength="250" />
+            </RadzenFormField>
+
+            <RadzenRow Gap="1rem" AlignItems="AlignItems.Center">
+                <RadzenColumn Size="6">
+                    <RadzenFormField Text="Opening balance (already owed)" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" Name="OpeningBalance" @bind-Value="model.OpeningBalance" ShowUpDown="false" Format="N2" Disabled="@isWalkIn" />
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="6">
+                    <RadzenCheckBox Name="IsActive" @bind-Value="model.IsActive" Disabled="@isWalkIn" />
+                    <RadzenLabel Text="Active" Component="IsActive" class="rz-ms-2" />
+                </RadzenColumn>
+            </RadzenRow>
+
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
+                <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(null))" />
+                <RadzenButton ButtonType="ButtonType.Submit" Text="Save" Icon="save" IsBusy="Busy" />
+            </RadzenStack>
+        </RadzenStack>
+    </RadzenTemplateForm>
+}
+
+@code {
+    /// <summary>0 = new customer. The dialog closes with the saved customer's Id, or null if cancelled.</summary>
+    [Parameter] public int CustomerId { get; set; }
+
+    private Customer? model;
+    private bool isWalkIn => model?.Id == Customer.WalkInId;
+    private static readonly CustomerType[] selectableTypes = [CustomerType.Regular, CustomerType.Painter, CustomerType.Contractor];
+
+    // Walk-in can't be chosen for new customers, but the list must contain the current value
+    // or the (disabled) dropdown shows blank when editing the walk-in customer.
+    private CustomerType[] types = selectableTypes;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (CustomerId == 0)
+        {
+            model = new Customer();
+            return;
+        }
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            model = await db.Customers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == CustomerId);
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        if (model is null)
+        {
+            Toast(NotificationSeverity.Warning, "This customer no longer exists.");
+            Dialogs.Close(null);
+            return;
+        }
+        if (!selectableTypes.Contains(model.Type))
+            types = [model.Type, .. selectableTypes];
+    }
+
+    private async Task SaveAsync()
+    {
+        if (model is null) return;
+        var ok = await RunAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            model.Name = model.Name.Trim();
+            model.Phone = string.IsNullOrWhiteSpace(model.Phone) ? null : model.Phone.Trim();
+            model.Address = string.IsNullOrWhiteSpace(model.Address) ? null : model.Address.Trim();
+            if (model.Id == 0) db.Customers.Add(model); else db.Customers.Update(model);
+            await db.SaveChangesAsync();
+        }, "Customer saved");
+
+        if (ok)
+            Dialogs.Close(model.Id);
+    }
+}

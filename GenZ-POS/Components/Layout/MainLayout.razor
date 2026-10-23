@@ -1,0 +1,173 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+
+<RadzenComponents />
+
+<RadzenLayout>
+    <RadzenHeader>
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Style="width:100%">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenSidebarToggle Click="@(() => sidebarExpanded = !sidebarExpanded)" />
+                @* Back to the previous screen (on every page). Kept in C# (history below): no browser keys / JS needed. *@
+                <RadzenButton Text="Back" Icon="arrow_back" Variant="Variant.Text" ButtonStyle="ButtonStyle.Base" Size="ButtonSize.Small"
+                              Disabled="@(history.Count < 2)" Click="GoBack" title="Back to the previous screen" Style="color:inherit" />
+                <RadzenImage Path="img/logo.png" AlternateText="@Shop.Name" Style="width:30px; height:30px" />
+                <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@Shop.Name</RadzenText>
+            </RadzenStack>
+            @if (CurrentUser.Session is { } user)
+            {
+                <RadzenProfileMenu Click="OnUserMenuClick" class="rz-me-2">
+                    <Template>
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                            <RadzenIcon Icon="account_circle" />
+                            <span>@user.DisplayName</span>
+                            <RadzenBadge BadgeStyle="BadgeStyle.Light" Variant="Variant.Flat" Text="@user.RoleName" />
+                        </RadzenStack>
+                    </Template>
+                    <ChildContent>
+                        <RadzenProfileMenuItem Text="Change password" Value="password" Icon="key" />
+                        <RadzenProfileMenuItem Text="Log out" Value="logout" Icon="logout" />
+                    </ChildContent>
+                </RadzenProfileMenu>
+            }
+        </RadzenStack>
+    </RadzenHeader>
+
+    <RadzenSidebar @bind-Expanded="@sidebarExpanded">
+        <RadzenPanelMenu>
+            <RadzenPanelMenuItem Text="Dashboard" Icon="dashboard" Path="" Match="NavLinkMatch.All" />
+            <RadzenPanelMenuItem Text="New Sale" Icon="point_of_sale" Path="sales/new" Visible="@Can(Permissions.SalesCreate)" />
+            <RadzenPanelMenuItem Text="Sales" Icon="receipt_long" Expanded="true"
+                                 Visible="@CanAny(Permissions.SalesView, Permissions.SaleReturnsManage, Permissions.PaymentsReceive, Permissions.CustomersManage)">
+                <RadzenPanelMenuItem Text="Sales List" Icon="receipt_long" Path="sales" Match="NavLinkMatch.All" Visible="@Can(Permissions.SalesView)" />
+                <RadzenPanelMenuItem Text="Sales Returns" Icon="assignment_return" Path="sale-returns" Visible="@Can(Permissions.SaleReturnsManage)" />
+                <RadzenPanelMenuItem Text="Receive Payment" Icon="payments" Path="payments" Visible="@Can(Permissions.PaymentsReceive)" />
+                <RadzenPanelMenuItem Text="Customers" Icon="groups" Path="customers" Visible="@Can(Permissions.CustomersManage)" />
+                <RadzenPanelMenuItem Text="Customer Ledger" Icon="menu_book" Path="ledger" Visible="@Can(Permissions.CustomersManage)" />
+            </RadzenPanelMenuItem>
+            <RadzenPanelMenuItem Text="Purchases" Icon="local_shipping" Expanded="true"
+                                 Visible="@CanAny(Permissions.PurchasesManage, Permissions.PurchaseReturnsManage, Permissions.SuppliersPay, Permissions.SuppliersManage)">
+                <RadzenPanelMenuItem Text="New Purchase" Icon="add_shopping_cart" Path="purchases/new" Visible="@Can(Permissions.PurchasesManage)" />
+                <RadzenPanelMenuItem Text="Purchase List" Icon="list_alt" Path="purchases" Match="NavLinkMatch.All" Visible="@Can(Permissions.PurchasesManage)" />
+                <RadzenPanelMenuItem Text="Purchase Returns" Icon="assignment_return" Path="purchase-returns" Visible="@Can(Permissions.PurchaseReturnsManage)" />
+                <RadzenPanelMenuItem Text="Pay Supplier" Icon="payments" Path="supplier-payments" Visible="@Can(Permissions.SuppliersPay)" />
+                <RadzenPanelMenuItem Text="Suppliers" Icon="store" Path="suppliers" Visible="@Can(Permissions.SuppliersManage)" />
+                <RadzenPanelMenuItem Text="Supplier Ledger" Icon="menu_book" Path="supplier-ledger" Visible="@Can(Permissions.SuppliersManage)" />
+            </RadzenPanelMenuItem>
+            <RadzenPanelMenuItem Text="Stock" Icon="inventory_2" Expanded="true" Visible="@CanAny(Permissions.StockView, Permissions.StockAdjust)">
+                <RadzenPanelMenuItem Text="Stock Report" Icon="inventory" Path="stock" Match="NavLinkMatch.All" Visible="@Can(Permissions.StockView)" />
+                <RadzenPanelMenuItem Text="Item History" Icon="history" Path="stock/history" Visible="@Can(Permissions.StockView)" />
+                <RadzenPanelMenuItem Text="Stock In / Out" Icon="swap_vert" Path="stock/adjustments" Visible="@Can(Permissions.StockAdjust)" />
+            </RadzenPanelMenuItem>
+            <RadzenPanelMenuItem Text="Reports" Icon="analytics" Expanded="true"
+                                 Visible="@CanAny(Permissions.ReportsDayBook, Permissions.ReportsProfit, Permissions.ReportsItemSales, Permissions.ReportsBalances)">
+                <RadzenPanelMenuItem Text="Day Book (Cash)" Icon="today" Path="reports/daybook" Visible="@Can(Permissions.ReportsDayBook)" />
+                <RadzenPanelMenuItem Text="Sales & Profit" Icon="trending_up" Path="reports/sales-profit" Visible="@Can(Permissions.ReportsProfit)" />
+                <RadzenPanelMenuItem Text="Item / Brand Sales" Icon="leaderboard" Path="reports/item-sales" Visible="@Can(Permissions.ReportsItemSales)" />
+                <RadzenPanelMenuItem Text="Receivables" Icon="call_received" Path="reports/receivables" Visible="@Can(Permissions.ReportsBalances)" />
+                <RadzenPanelMenuItem Text="Payables" Icon="call_made" Path="reports/payables" Visible="@Can(Permissions.ReportsBalances)" />
+            </RadzenPanelMenuItem>
+            <RadzenPanelMenuItem Text="Catalog" Icon="category" Visible="@Can(Permissions.CatalogManage)">
+                <RadzenPanelMenuItem Text="Products" Icon="format_color_fill" Path="products" />
+                <RadzenPanelMenuItem Text="Companies" Icon="factory" Path="companies" />
+                <RadzenPanelMenuItem Text="Categories" Icon="account_tree" Path="categories" />
+            </RadzenPanelMenuItem>
+            <RadzenPanelMenuItem Text="Users & Roles" Icon="manage_accounts" Path="users" Visible="@Can(Permissions.UsersManage)" />
+            <RadzenPanelMenuItem Text="Settings & Backup" Icon="settings" Path="settings" Visible="@Can(Permissions.SettingsManage)" />
+        </RadzenPanelMenu>
+        <div class="rz-px-4 rz-py-2" style="font-size:0.75rem; opacity:0.6">@($"GenZ-POS v{AppConfig.Version}")</div>
+    </RadzenSidebar>
+
+    <RadzenBody>
+        <div class="rz-p-2">
+            @* A crash in one page shows a friendly message instead of killing the app; navigating away recovers. *@
+            <ErrorBoundary @ref="errorBoundary">
+                <ChildContent>@Body</ChildContent>
+                <ErrorContent Context="ex">
+                    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Title="This screen ran into a problem">
+                        @PageBase.FriendlyMessage(ex)
+                        <div class="rz-mt-2">
+                            <RadzenButton Text="Try again" Icon="refresh" Size="ButtonSize.Small" Click="@(() => errorBoundary?.Recover())" />
+                        </div>
+                    </RadzenAlert>
+                </ErrorContent>
+            </ErrorBoundary>
+        </div>
+    </RadzenBody>
+</RadzenLayout>
+
+@code {
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+    [Inject] private ShopInfo Shop { get; set; } = default!;
+    [Inject] private CurrentUser CurrentUser { get; set; } = default!;
+    [Inject] private AuthService Auth { get; set; } = default!;
+    [Inject] private DialogService Dialogs { get; set; } = default!;
+
+    private bool sidebarExpanded = true;
+    private ErrorBoundary? errorBoundary;
+
+    private bool Can(string permission) => CurrentUser.Has(permission);
+    private bool CanAny(params string[] permissions) => permissions.Any(CurrentUser.Has);
+
+    // Screens visited (newest last) for the Back button. The app runs in a WebView without browser buttons / keys
+    // (release builds), so the layout keeps its own list.
+    private const int MaxHistory = 50;
+    private readonly List<string> history = [];
+    private bool goingBack;
+
+    protected override void OnInitialized()
+    {
+        history.Add(Nav.Uri);
+        Nav.LocationChanged += OnLocationChanged;
+        Shop.Changed += OnSharedStateChanged;
+        CurrentUser.Changed += OnSharedStateChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        errorBoundary?.Recover();
+        if (goingBack)
+            goingBack = false;
+        else if (history.Count == 0 || !string.Equals(history[^1], e.Location, StringComparison.OrdinalIgnoreCase))
+        {
+            history.Add(e.Location);
+            if (history.Count > MaxHistory) history.RemoveAt(0);
+        }
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void GoBack()
+    {
+        if (history.Count < 2) return;
+        history.RemoveAt(history.Count - 1);
+        goingBack = true;
+        Nav.NavigateTo(history[^1]);
+    }
+
+    // ShopInfo / CurrentUser are singletons and may raise Changed from any thread.
+    private void OnSharedStateChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task OnUserMenuClick(RadzenProfileMenuItem item)
+    {
+        if (item.Value == "password")
+        {
+            if (await Dialogs.OpenAsync<ChangePasswordForm>("Change password",
+                    new Dictionary<string, object?> { [nameof(ChangePasswordForm.InDialog)] = true },
+                    new DialogOptions { Width = "420px" }) == true)
+                await Dialogs.Alert("Your password was changed.", "Change password");
+        }
+        else if (item.Value == "logout")
+        {
+            Auth.Logout();
+            history.Clear(); // the next user starts without Back
+            Nav.NavigateTo("");
+        }
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        Shop.Changed -= OnSharedStateChanged;
+        CurrentUser.Changed -= OnSharedStateChanged;
+    }
+}

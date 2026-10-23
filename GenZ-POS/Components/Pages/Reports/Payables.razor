@@ -1,0 +1,149 @@
+@page "/reports/payables"
+@attribute [Authorize(Policy = Permissions.ReportsBalances)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="no-print">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Payables (suppliers we owe)</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Print" Icon="print" ButtonStyle="ButtonStyle.Light" Click="PrintAsync" Disabled="@(items is null)" />
+        <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportAsync" Disabled="@(items is null)" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard class="rz-mb-3 no-print">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+        <RadzenTextBox Placeholder="Search name or phone…" @bind-Value="search" @bind-Value:after="Apply" Style="flex:1; min-width:200px; max-width:360px" />
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+            <RadzenCheckBox Name="WithAdvances" @bind-Value="withAdvances" @bind-Value:after="Apply" />
+            <RadzenLabel Text="Also show advances (suppliers who owe us)" Component="WithAdvances" />
+        </RadzenStack>
+        <RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="LoadAsync" IsBusy="@loading" />
+    </RadzenStack>
+</RadzenCard>
+
+@if (items is null)
+{
+    if (loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    }
+}
+else
+{
+    <RadzenCard>
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem" class="rz-mb-2">
+            <ReportHeader Title="Payables — suppliers we owe" AsOf="@DateTime.Today" />
+            <RadzenStack Gap="0.25rem" Style="width:300px">
+                <TotalLine Label="@($"Total payable ({items.Count(s => s.Balance > 0)})")" Value="@Money(Payable)" Strong="true" Danger="@(Payable > 0)" />
+                <TotalLine Label="@($"Advances paid ({items.Count(s => s.Balance < 0)})")" Value="@Money(Advances)" />
+            </RadzenStack>
+        </RadzenStack>
+
+        <RadzenDataGrid TItem="SupplierBalance" Data="@visible" AllowPaging="@(!printAll)" PageSize="50" ShowPagingSummary="true" AllowSorting="true"
+                        Density="Density.Compact" EmptyText="We don't owe any supplier. 👍">
+            <Columns>
+                <RadzenDataGridColumn Property="Name" Title="Supplier">
+                    <Template><RadzenLink Path="@($"supplier-ledger/{context.Id}")" Text="@context.Name" title="Open ledger" /></Template>
+                    <FooterTemplate><strong>Total</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="Phone" Title="Phone" Width="140px" />
+                <RadzenDataGridColumn Property="Balance" Title="We owe" Width="140px" TextAlign="TextAlign.Right">
+                    <Template>
+                        @if (context.Balance < 0)
+                        {
+                            <span title="Advance: this supplier owes us">@Money(-context.Balance) adv.</span>
+                        }
+                        else
+                        {
+                            <strong style="color:var(--rz-danger)">@Money(context.Balance)</strong>
+                        }
+                    </Template>
+                    <FooterTemplate><strong>@Money(visible.Sum(s => s.Balance))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="LastPurchaseDate" Title="Last purchase" Width="120px">
+                    <Template>@(context.LastPurchaseDate is DateTime d ? Date(d) : "")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="LastPaymentDate" Title="Last payment" Width="120px">
+                    <Template>@(context.LastPaymentDate is DateTime d ? Date(d) : "Never")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="DaysSinceLastPayment" Title="Days since payment" Width="110px" TextAlign="TextAlign.Right">
+                    <Template>@(context.DaysSinceLastPayment?.ToString() ?? "—")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Width="100px" Sortable="false" TextAlign="TextAlign.Right" CssClass="no-print" HeaderCssClass="no-print" FooterCssClass="no-print">
+                    <Template>
+                        <RadzenButton Icon="menu_book" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Info" Variant="Variant.Outlined" title="Ledger"
+                                      Click="@(() => Nav.NavigateTo($"supplier-ledger/{context.Id}"))" />
+                        <RadzenButton Icon="payments" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Success" Variant="Variant.Outlined" title="Pay supplier"
+                                      Click="@(() => Nav.NavigateTo($"supplier-payments?supplier={context.Id}"))" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenCard>
+}
+
+@code {
+    private List<SupplierBalance>? items;
+    private List<SupplierBalance> visible = [];
+    private string? search;
+    private bool withAdvances, loading, printAll;
+    private int loadVersion;
+
+    private decimal Payable => items?.Where(s => s.Balance > 0).Sum(s => s.Balance) ?? 0;
+    private decimal Advances => -(items?.Where(s => s.Balance < 0).Sum(s => s.Balance) ?? 0);
+
+    /// <summary>Applies search / advances filter and sorts by balance (biggest first).</summary>
+    private void Apply() => visible = (items ?? [])
+        .Where(s => withAdvances ? s.Balance != 0 : s.Balance > 0)
+        .Where(s => string.IsNullOrWhiteSpace(search)
+                    || s.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
+                    || (s.Phone ?? "").Contains(search.Trim(), StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(s => s.Balance).ThenBy(s => s.Name)
+        .ToList();
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            var result = await Reports.GetSupplierBalancesAsync();
+            if (version != loadVersion) return;
+            items = result;
+            Apply();
+            printAll = false;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        printAll = true; // print every row, not just the current page
+        StateHasChanged();
+        await Task.Delay(150);
+        await Desktop.PrintAsync();
+    }
+
+    private async Task ExportAsync()
+    {
+        var rows = visible;
+        var lines = new List<object?[]> { new object?[] { "Supplier", "Phone", "We owe", "Last purchase", "Last payment", "Days since payment" } };
+        lines.AddRange(rows.Select(s => new object?[] { s.Name, s.Phone, s.Balance, s.LastPurchaseDate, s.LastPaymentDate, s.DaysSinceLastPayment }));
+        lines.Add(["Total", null, rows.Sum(s => s.Balance), null, null, null]);
+
+        var path = await Desktop.SaveTextFileAsync($"Payables {DateTime.Today:yyyy-MM-dd}.csv", "CSV files (*.csv)|*.csv", Csv(lines));
+        if (path is not null)
+            Toast(NotificationSeverity.Success, $"Saved to {path}");
+    }
+}

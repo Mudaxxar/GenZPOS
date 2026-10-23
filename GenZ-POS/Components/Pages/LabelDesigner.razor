@@ -1,0 +1,277 @@
+@page "/settings/label-design"
+@attribute [Authorize(Policy = Permissions.SettingsManage)]
+@inherits PageBase
+@inject ShopInfo Shop
+@inject AppConfig Config
+
+@* Barcode label designer (owner: "like BarTender, our own design, drag and drop"). Label size in mm; elements are
+   dragged to move (both directions) and resized by their corner handle, snapping to 0.5 mm; arrow keys nudge the
+   selected one (Shift = 5 mm), Delete removes it. Exact X / Y / W / H, font, bold, alignment and prefix in the panel.
+   Saved as JSON in the Settings table (ShopInfo.SaveLabelDesignAsync) → used by LabelPrinter and the Labels screen.
+   The canvas is Shared/LabelCanvas.razor; moving is done here from pointer events (no JS). *@
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Barcode label design</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center">
+        <RadzenButton Text="Reset to default layout" Icon="restart_alt" ButtonStyle="ButtonStyle.Light" Click="ResetAsync" />
+        <RadzenButton Text="Undo changes" Icon="undo" ButtonStyle="ButtonStyle.Light" Disabled="@(!dirty)" Click="Reload" />
+        <RadzenButton Text="Save design" Icon="save" IsBusy="@saving" Disabled="@(!dirty)" Click="SaveAsync" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenRow Gap="1rem">
+    @* ---------- Canvas ---------- *@
+    <RadzenColumn Size="12" SizeLG="7">
+        <RadzenCard>
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.75rem" Wrap="FlexWrap.Wrap" class="rz-mb-3">
+                <RadzenFormField Text="Label width (mm)" Style="width:140px">
+                    <RadzenNumeric TValue="double" Value="@design.WidthMm" ValueChanged="@(v => Resize(v, design.HeightMm))" Min="10" Max="300" Step="1" Format="0.#" />
+                </RadzenFormField>
+                <RadzenFormField Text="Label height (mm)" Style="width:140px">
+                    <RadzenNumeric TValue="double" Value="@design.HeightMm" ValueChanged="@(v => Resize(design.WidthMm, v))" Min="10" Max="600" Step="1" Format="0.#" />
+                </RadzenFormField>
+                <RadzenFormField Text="Add" Style="width:190px">
+                    <RadzenDropDown TValue="LabelField?" Data="@fields" TextProperty="Text" ValueProperty="Value" Placeholder="Add an item…"
+                                    @bind-Value="addField" @bind-Value:after="AddElement" />
+                </RadzenFormField>
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="opacity:.7; max-width:260px">
+                    Drag to move · drag the blue corner to resize · arrow keys nudge (Shift = 5 mm) · Delete removes
+                </RadzenText>
+            </RadzenStack>
+
+            <div class="designer-surface" tabindex="0" @onkeydown="KeyAsync" @onkeydown:preventDefault="@keyHandled"
+                 @onpointermove="Move" @onpointerup="Up" @onpointerleave="Up" @onpointerdown="SurfaceDown">
+                <LabelCanvas Design="@design" Label="@sample" PxPerMm="@Scale" Interactive="true" SelectedId="@selected?.Id"
+                             ElementPointerDown="Down" />
+            </div>
+            <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0" Style="display:block; opacity:.7">
+                Preview with a sample piece. Text sizes on screen are close; the printer fits each text exactly into its box.
+            </RadzenText>
+        </RadzenCard>
+    </RadzenColumn>
+
+    @* ---------- Selected item + test print ---------- *@
+    <RadzenColumn Size="12" SizeLG="5">
+        <RadzenCard class="rz-mb-3">
+            @if (selected is { } e)
+            {
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="rz-mb-2">
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@LabelDesign.FieldName(e.Field)</RadzenText>
+                    <RadzenButton Text="Delete" Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" Click="DeleteSelected" />
+                </RadzenStack>
+                <RadzenRow Gap="0.75rem">
+                    <RadzenColumn Size="6"><RadzenFormField Text="Left (mm)" Style="width:100%"><RadzenNumeric TValue="double" @bind-Value="e.X" @bind-Value:after="Changed" Step="0.5" Format="0.#" /></RadzenFormField></RadzenColumn>
+                    <RadzenColumn Size="6"><RadzenFormField Text="Top (mm)" Style="width:100%"><RadzenNumeric TValue="double" @bind-Value="e.Y" @bind-Value:after="Changed" Step="0.5" Format="0.#" /></RadzenFormField></RadzenColumn>
+                    <RadzenColumn Size="6"><RadzenFormField Text="Width (mm)" Style="width:100%"><RadzenNumeric TValue="double" @bind-Value="e.W" @bind-Value:after="Changed" Min="1" Step="0.5" Format="0.#" /></RadzenFormField></RadzenColumn>
+                    <RadzenColumn Size="6"><RadzenFormField Text="@(e.Field == LabelField.Line ? "Thickness (mm)" : "Height (mm)")" Style="width:100%"><RadzenNumeric TValue="double" @bind-Value="e.H" @bind-Value:after="Changed" Min="0.2m" Step="0.5" Format="0.#" /></RadzenFormField></RadzenColumn>
+                    @if (IsText(e.Field))
+                    {
+                        <RadzenColumn Size="6"><RadzenFormField Text="Font size (pt, max)" Style="width:100%"><RadzenNumeric TValue="double" @bind-Value="e.FontPt" @bind-Value:after="Changed" Min="4" Max="200" Step="1" Format="0.#" /></RadzenFormField></RadzenColumn>
+                        <RadzenColumn Size="6">
+                            <RadzenFormField Text="Align" Style="width:100%">
+                                <RadzenDropDown TValue="LabelAlign" Data="@(Enum.GetValues<LabelAlign>())" @bind-Value="e.Align" @bind-Value:after="Changed" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12">
+                            <RadzenFormField Text="@(e.Field == LabelField.Text ? "Text" : "Text before the value (e.g. Size )")" Style="width:100%">
+                                <RadzenTextBox @bind-Value="e.Text" @bind-Value:after="Changed" MaxLength="60" Immediate="true" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12">
+                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                <RadzenSwitch @bind-Value="e.Bold" @bind-Value:after="Changed" Name="Bold" />
+                                <RadzenLabel Text="Bold" Component="Bold" />
+                            </RadzenStack>
+                        </RadzenColumn>
+                    }
+                </RadzenRow>
+            }
+            else
+            {
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" Style="opacity:.7">Click an item on the label to change it, or add one with “Add”.</RadzenText>
+            }
+        </RadzenCard>
+
+        <RadzenCard>
+            <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mb-2">Test print</RadzenText>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center">
+                <RadzenDropDown TValue="string" Data="@printers" @bind-Value="printer" Placeholder="Choose label printer" Style="width:220px" />
+                <RadzenButton Text="Print test label" Icon="print" IsBusy="@printing" Disabled="@(printer is null)" Click="PrintTestAsync" />
+            </RadzenStack>
+            <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0" Style="display:block; opacity:.7">
+                Prints this design (also unsaved changes) with the sample piece.
+            </RadzenText>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private sealed record FieldOption(LabelField Value, string Text);
+    private static readonly FieldOption[] fields = Enum.GetValues<LabelField>().Select(f => new FieldOption(f, LabelDesign.FieldName(f))).ToArray();
+
+    private LabelDesign design = LabelDesign.Default();
+    private LabelElement? selected;
+    private LabelField? addField;
+    private bool dirty, saving, printing, keyHandled;
+    private readonly LabelData sample = LabelDesign.Sample;
+    private IReadOnlyList<string> printers = [];
+    private string? printer;
+
+    /// <summary>Screen pixels per mm: the whole label fits about 560 × 430 px.</summary>
+    private double Scale => Math.Clamp(Math.Min(560 / design.HeightMm, 430 / design.WidthMm), 1.2, 8);
+
+    protected override void OnInitialized()
+    {
+        Reload();
+        printers = ReceiptPrinter.InstalledPrinters();
+        printer = printers.FirstOrDefault(p => string.Equals(p, Config.LabelPrinter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void Reload()
+    {
+        design = Shop.LabelDesign.Clone();
+        selected = null;
+        dirty = false;
+    }
+
+    private void Changed() => dirty = true;
+
+    private static bool IsText(LabelField f) => f is not (LabelField.Logo or LabelField.Barcode or LabelField.Line);
+
+    // ---------- drag & resize (pointer events from the canvas, moves computed here) ----------
+
+    private sealed record DragState(LabelElement Element, bool Resize, double StartX, double StartY, double X, double Y, double W, double H);
+    private DragState? drag;
+
+    private void Down((LabelElement Element, bool Resize, PointerEventArgs Args) d)
+    {
+        selected = d.Element;
+        drag = new DragState(d.Element, d.Resize, d.Args.ClientX, d.Args.ClientY, d.Element.X, d.Element.Y, d.Element.W, d.Element.H);
+    }
+
+    /// <summary>Pressing the empty label (not an item) clears the selection.</summary>
+    private void SurfaceDown(PointerEventArgs _)
+    {
+        if (drag is null) selected = null;
+    }
+
+    private void Move(PointerEventArgs args)
+    {
+        if (drag is not { } d) return;
+        var dx = (args.ClientX - d.StartX) / Scale;
+        var dy = (args.ClientY - d.StartY) / Scale;
+        var e = d.Element;
+        if (d.Resize)
+        {
+            e.W = Math.Clamp(Snap(d.W + dx), 1, design.WidthMm - e.X);
+            if (e.Field != LabelField.Line)
+                e.H = Math.Clamp(Snap(d.H + dy), 1, design.HeightMm - e.Y);
+        }
+        else
+        {
+            e.X = Math.Clamp(Snap(d.X + dx), 0, Math.Max(0, design.WidthMm - e.W));
+            e.Y = Math.Clamp(Snap(d.Y + dy), 0, Math.Max(0, design.HeightMm - e.H));
+        }
+        dirty = true;
+    }
+
+    private void Up(PointerEventArgs _) => drag = null;
+
+    private static double Snap(double mm) => Math.Round(mm * 2, MidpointRounding.AwayFromZero) / 2; // 0.5 mm grid
+
+    /// <summary>Arrow keys nudge the selected item (Shift = 5 mm); Delete removes it.</summary>
+    private void KeyAsync(KeyboardEventArgs k)
+    {
+        keyHandled = false;
+        if (selected is not { } e) return;
+        var step = k.ShiftKey ? 5 : 0.5;
+        switch (k.Key)
+        {
+            case "ArrowLeft": e.X = Math.Max(0, e.X - step); break;
+            case "ArrowRight": e.X = Math.Min(design.WidthMm - e.W, e.X + step); break;
+            case "ArrowUp": e.Y = Math.Max(0, e.Y - step); break;
+            case "ArrowDown": e.Y = Math.Min(design.HeightMm - e.H, e.Y + step); break;
+            case "Delete": DeleteSelected(); keyHandled = true; return;
+            default: return;
+        }
+        keyHandled = true;
+        dirty = true;
+    }
+
+    // ---------- add / delete / size ----------
+
+    private void AddElement()
+    {
+        if (addField is not { } f) return;
+        double w = Math.Min(design.WidthMm * 0.8, 80), h = f switch
+        {
+            LabelField.Line => 0.6,
+            LabelField.Barcode => Math.Min(design.HeightMm * 0.2, 40),
+            LabelField.Logo => Math.Min(design.HeightMm * 0.15, 30),
+            _ => Math.Min(design.HeightMm * 0.06, 12),
+        };
+        var e = new LabelElement
+        {
+            Field = f, W = w, H = h,
+            X = Snap((design.WidthMm - w) / 2), Y = Snap((design.HeightMm - h) / 2),
+            FontPt = 16, Bold = f is LabelField.Price or LabelField.ProductName,
+            Text = f == LabelField.Text ? "Your text" : null,
+        };
+        design.Elements.Add(e);
+        selected = e;
+        addField = null;
+        dirty = true;
+    }
+
+    private void DeleteSelected()
+    {
+        if (selected is null) return;
+        design.Elements.Remove(selected);
+        selected = null;
+        dirty = true;
+    }
+
+    /// <summary>A new label size keeps the design: every item (and its font) scales with it.</summary>
+    private void Resize(double widthMm, double heightMm)
+    {
+        if (widthMm < 10 || heightMm < 10) return;
+        double sx = widthMm / design.WidthMm, sy = heightMm / design.HeightMm, fs = Math.Min(sx, sy);
+        foreach (var e in design.Elements)
+        {
+            e.X = Snap(e.X * sx); e.W = Math.Max(1, Snap(e.W * sx));
+            e.Y = Snap(e.Y * sy);
+            if (e.Field != LabelField.Line) e.H = Math.Max(1, Snap(e.H * sy));
+            e.FontPt = Math.Round(e.FontPt * fs, 1);
+        }
+        design.WidthMm = widthMm;
+        design.HeightMm = heightMm;
+        dirty = true;
+    }
+
+    private async Task ResetAsync()
+    {
+        if (!await ConfirmAsync("Replace this design with the default layout (at the current label size)?")) return;
+        design = LabelDesign.Default(design.WidthMm, design.HeightMm, withShopName: Shop.Logo is null);
+        selected = null;
+        dirty = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        if (await RunAsync(() => Shop.SaveLabelDesignAsync(design.Clone()), "Label design saved — labels now print with it"))
+            dirty = false;
+        saving = false;
+    }
+
+    private async Task PrintTestAsync()
+    {
+        if (printer is null) return;
+        printing = true;
+        Config.LabelPrinter = printer;
+        try { Config.Save(); } catch (Exception ex) { AppLog.Warn("Could not save the label printer", ex); }
+        var (d, p) = (design.Clone(), printer);
+        var problem = await Task.Run(() => LabelPrinter.Print([sample], d, Shop, p));
+        Toast(problem is null ? NotificationSeverity.Success : NotificationSeverity.Error, problem ?? $"Test label sent to {printer}.", 5000);
+        printing = false;
+    }
+}

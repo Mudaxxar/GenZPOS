@@ -1,0 +1,136 @@
+@inject ShopInfo Shop
+
+@* Thermal receipt (80 mm / 58 mm roll) for a sale invoice. Black on white only, no backgrounds, so it prints crisp on
+   any receipt printer; widths in mm (styles: wwwroot/css/app.css, ".receipt"). Shown as a preview on the invoice screen
+   and printed instead of the A4 invoice when the print format is a receipt (SaleView). *@
+<div class="receipt @(Width58 ? "receipt-58" : "receipt-80")">
+    @if (Shop.LogoDataUri is { } logo)
+    {
+        <img class="r-logo" src="@logo" alt="@Shop.Name" />
+    }
+    @if (Shop.PrintName)
+    {
+        <div class="r-shop">@Shop.Name</div>
+    }
+    @if (!string.IsNullOrEmpty(Shop.Address)) { <div class="r-center r-contact" style="white-space:pre-line">@Shop.Address</div> }
+    @if (!string.IsNullOrEmpty(Shop.Phone)) { <div class="r-center r-contact">Mobile: @Shop.Phone</div> }
+
+    <div class="r-title">@(Exchange is null ? "SALES RECEIPT" : "EXCHANGE RECEIPT")</div>
+    <div class="r-row"><span>Invoice #</span><strong>@Sale.Id</strong></div>
+    <div class="r-row"><span>Date</span><span>@Sale.SaleDate.ToString("dd-MMM-yyyy") @Sale.CreatedAt.ToString("HH:mm")</span></div>
+    <div class="r-row"><span>Customer</span><span class="r-right">@Sale.Customer?.Name</span></div>
+    @if (!IsWalkIn && !string.IsNullOrEmpty(Sale.Customer?.Phone))
+    {
+        <div class="r-row"><span>Phone</span><span>@Sale.Customer.Phone</span></div>
+    }
+
+    <div class="r-rule"></div>
+    @for (var i = 0; i < Sale.Lines.Count; i++)
+    {
+        var l = Sale.Lines[i];
+        var item = l.StockItem;
+        <div class="r-item">
+            <div class="r-item-name">@(i + 1). @item?.Product?.Name</div>
+            <div class="r-item-sub">@string.Join(" · ", new[] { item?.ArticleNo, item?.Barcode, item?.Colour, item?.Size is { Length: > 0 } s ? $"Size {s}" : null }.Where(s => !string.IsNullOrWhiteSpace(s)))</div>
+            <div class="r-row">
+                <span>@Fmt.Qty(l.Qty) × @Fmt.Money(l.Rate)</span>
+                <strong>@Fmt.Money(l.Amount)</strong>
+            </div>
+        </div>
+    }
+    <div class="r-rule"></div>
+
+    <div class="r-row"><span>Items</span><span>@Sale.Lines.Count (qty @Fmt.Qty(Sale.Lines.Sum(l => l.Qty)))</span></div>
+    <div class="r-row"><span>Sub total</span><span>@Fmt.Money(Sale.SubTotal)</span></div>
+    @if (Sale.Discount > 0)
+    {
+        <div class="r-row"><span>Discount</span><span>- @Fmt.Money(Sale.Discount)</span></div>
+    }
+    @if (Exchange is { } ex)
+    {
+        @* Exchange: the returned items (what was paid for them) are taken off the new items. *@
+        <div class="r-row r-strong"><span>New items total</span><span>@Fmt.Money(Sale.Total)</span></div>
+        <div class="r-rule-thin"></div>
+        <div class="r-center"><strong>RETURNED ITEMS</strong></div>
+        @foreach (var r in Sale.ExchangeReturns)
+        {
+            @foreach (var l in r.Lines)
+            {
+                var item = l.StockItem;
+                <div class="r-item">
+                    <div class="r-item-name">@item?.Product?.Name</div>
+                    <div class="r-item-sub">@string.Join(" · ", new[] { item?.ArticleNo, item?.Barcode, item?.Colour, item?.Size is { Length: > 0 } s ? $"Size {s}" : null }.Where(s => !string.IsNullOrWhiteSpace(s))) · inv #@r.SaleId</div>
+                    <div class="r-row">
+                        <span>@Fmt.Qty(l.Qty) × @Fmt.Money(l.Rate)@(l.Amount < Math.Round(l.Qty * l.Rate, 2) ? " less disc." : "")</span>
+                        <strong>- @Fmt.Money(l.Amount)</strong>
+                    </div>
+                </div>
+            }
+        }
+        <div class="r-row r-strong"><span>Returned total</span><span>- @Fmt.Money(ex.Returned)</span></div>
+        <div class="r-total"><span>@(ex.Net >= 0 ? "TO PAY" : "TO GIVE BACK")</span><span>@Fmt.Money(Math.Abs(ex.Net))</span></div>
+        @if (ex.Net >= 0)
+        {
+            <div class="r-row"><span>Paid now</span><span>@Fmt.Money(ex.PaidNow)</span></div>
+            @if (Sale.Due > 0)
+            {
+                <div class="r-row r-strong"><span>Due on this invoice</span><span>@Fmt.Money(Sale.Due)</span></div>
+            }
+        }
+        else
+        {
+            <div class="r-row"><span>Cash given back</span><span>@Fmt.Money(ex.CashBack)</span></div>
+            @if (ex.Credit > 0)
+            {
+                <div class="r-row r-strong"><span>Kept as credit</span><span>@Fmt.Money(ex.Credit)</span></div>
+            }
+        }
+    }
+    else
+    {
+        <div class="r-total"><span>TOTAL</span><span>@Fmt.Money(Sale.Total)</span></div>
+        <div class="r-row"><span>Paid</span><span>@Fmt.Money(Sale.Paid)</span></div>
+        @if (Sale.Due > 0)
+        {
+            <div class="r-row r-strong"><span>Due on this invoice</span><span>@Fmt.Money(Sale.Due)</span></div>
+        }
+    }
+    @if (Sale.Discount > 0)
+    {
+        <div class="r-saved">You saved @Fmt.Money(Sale.Discount)</div>
+    }
+    @if (!IsWalkIn)
+    {
+        <div class="r-rule-thin"></div>
+        <div class="r-row"><span>Previous balance</span><span>@Fmt.Money(PreviousBalance)</span></div>
+        <div class="r-row r-strong"><span>New balance</span><span>@Fmt.Money(PreviousBalance + Sale.Due - (Exchange?.Credit ?? 0))</span></div>
+    }
+    @if (!string.IsNullOrEmpty(Sale.Notes))
+    {
+        <div class="r-rule-thin"></div>
+        <div class="r-small">Note: @Sale.Notes</div>
+    }
+
+    <div class="r-rule"></div>
+    <div class="r-center r-thanks">
+        @if (!string.IsNullOrEmpty(Shop.InvoiceFooter))
+        {
+            <div style="white-space:pre-line">@Shop.InvoiceFooter</div>
+        }
+        else
+        {
+            <div><strong>Thank you for shopping with us!</strong></div>
+            <div class="r-small">Goods once sold are not returnable without this receipt.</div>
+        }
+    </div>
+    <div class="r-center r-tiny">*** @Sale.Id ***</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Sale Sale { get; set; } = default!;
+    [Parameter] public decimal PreviousBalance { get; set; }
+    [Parameter] public bool Width58 { get; set; }
+
+    private bool IsWalkIn => Sale.CustomerId == Customer.WalkInId;
+    private ExchangeSummary? Exchange => ExchangeSummary.Of(Sale);
+}

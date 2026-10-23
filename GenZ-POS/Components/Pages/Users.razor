@@ -1,0 +1,296 @@
+@page "/users"
+@attribute [Authorize(Policy = Permissions.UsersManage)]
+@inherits PageBase
+@inject UserService UserAdmin
+
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Users &amp; Roles</RadzenText>
+
+<RadzenTabs RenderMode="TabRenderMode.Client">
+    <Tabs>
+        <RadzenTabsItem Text="Users">
+            <RadzenRow Gap="1rem">
+                <RadzenColumn Size="12" SizeMD="4">
+                    <RadzenCard>
+                        <RadzenTemplateForm TItem="UserRow" Data="@user" Submit="SaveUserAsync">
+                            <RadzenStack Gap="1rem">
+                                <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@(user.Id == 0 ? "New user" : $"Edit {user.UserName}")</RadzenText>
+                                <RadzenFormField Text="User name *">
+                                    <RadzenTextBox Name="UserName" @bind-Value="user.UserName" MaxLength="50" autocomplete="off" data-enter-first="true" />
+                                </RadzenFormField>
+                                <RadzenFormField Text="Full name">
+                                    <RadzenTextBox Name="FullName" @bind-Value="user.FullName" MaxLength="100" />
+                                </RadzenFormField>
+                                <RadzenFormField Text="Role *">
+                                    <RadzenDropDown TValue="int" Name="RoleId" @bind-Value="user.RoleId" Data="@roles" TextProperty="Name" ValueProperty="Id"
+                                                    OpenOnFocus="true" />
+                                </RadzenFormField>
+                                <RadzenFormField Text="@(user.Id == 0 ? "Password *" : "New password (blank = keep)")">
+                                    <RadzenPassword Name="Password" @bind-Value="password" autocomplete="new-password" />
+                                </RadzenFormField>
+                                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                    <RadzenCheckBox Name="MustChange" @bind-Value="mustChange" />
+                                    <RadzenLabel Text="Must choose own password at next login" Component="MustChange" />
+                                </RadzenStack>
+                                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                    <RadzenCheckBox Name="IsActive" @bind-Value="user.IsActive" />
+                                    <RadzenLabel Text="Active (can log in)" Component="IsActive" />
+                                </RadzenStack>
+                                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                                    <RadzenButton ButtonType="ButtonType.Submit" Text="Save" Icon="save" IsBusy="Busy" />
+                                    <RadzenButton Text="Clear" ButtonStyle="ButtonStyle.Light" Click="ResetUser" />
+                                </RadzenStack>
+                            </RadzenStack>
+                        </RadzenTemplateForm>
+                    </RadzenCard>
+                </RadzenColumn>
+
+                <RadzenColumn Size="12" SizeMD="8">
+                    <RadzenCard>
+                        <RadzenDataGrid TItem="UserRow" Data="@users" IsLoading="@loading" AllowSorting="true" Density="Density.Compact" EmptyText="No users.">
+                            <Columns>
+                                <RadzenDataGridColumn Property="UserName" Title="User name" Width="140px" />
+                                <RadzenDataGridColumn Property="FullName" Title="Full name" />
+                                <RadzenDataGridColumn Property="RoleName" Title="Role" Width="110px" />
+                                <RadzenDataGridColumn Property="LastLoginAt" Title="Last login" Width="150px">
+                                    <Template>@(context.LastLoginAt is { } d ? d.ToString("dd/MM/yyyy HH:mm") : "Never")</Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn Width="260px" Sortable="false" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @if (!context.IsActive) { <RadzenBadge BadgeStyle="BadgeStyle.Light" Text="Inactive" class="rz-me-1" /> }
+                                        @if (context.IsLocked) { <RadzenBadge BadgeStyle="BadgeStyle.Danger" Text="Locked" class="rz-me-1" /> }
+                                        @if (context.MustChangePassword) { <RadzenBadge BadgeStyle="BadgeStyle.Warning" Text="New password" class="rz-me-1" title="Must choose a password at next login" /> }
+                                        @if (context.IsLocked)
+                                        {
+                                            <RadzenButton Icon="lock_open" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Warning" Variant="Variant.Outlined" title="Unlock"
+                                                          Click="@(() => UnlockAsync(context))" />
+                                        }
+                                        <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Edit" Click="@(() => EditUser(context))" />
+                                        <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete"
+                                                      Visible="@(context.Id != CurrentUser.Session?.UserId)" Click="@(() => DeleteUserAsync(context))" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                            </Columns>
+                        </RadzenDataGrid>
+                        <RadzenText TextStyle="TextStyle.Body2" class="rz-mt-2 rz-mb-0" Style="opacity:0.7">
+                            Five wrong passwords lock a user for 5 minutes. A forgotten password: edit the user, type a new one and keep
+                            "must choose own password" ticked.
+                        </RadzenText>
+                    </RadzenCard>
+                </RadzenColumn>
+            </RadzenRow>
+        </RadzenTabsItem>
+
+        <RadzenTabsItem Text="Roles &amp; rights">
+            <RadzenRow Gap="1rem">
+                <RadzenColumn Size="12" SizeMD="4">
+                    <RadzenCard>
+                        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="rz-mb-2">
+                            <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Roles</RadzenText>
+                            <RadzenButton Text="New role" Icon="add" Size="ButtonSize.Small" Click="NewRole" />
+                        </RadzenStack>
+                        <RadzenDataGrid TItem="RoleRow" Data="@roles" Density="Density.Compact" EmptyText="No roles."
+                                        RowClick="@(a => EditRole(a.Data!))" Style="cursor:pointer">
+                            <Columns>
+                                <RadzenDataGridColumn Property="Name" Title="Role">
+                                    <Template>
+                                        <strong>@context.Name</strong>
+                                        @if (context.Description is { } d) { <div style="font-size:0.8rem; opacity:0.7">@d</div> }
+                                    </Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn Property="UserCount" Title="Users" Width="70px" TextAlign="TextAlign.Right" />
+                                <RadzenDataGridColumn Width="60px" Sortable="false" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete"
+                                                      Visible="@(!context.IsAdmin)" Click="@(() => DeleteRoleAsync(context))" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                            </Columns>
+                        </RadzenDataGrid>
+                    </RadzenCard>
+                </RadzenColumn>
+
+                <RadzenColumn Size="12" SizeMD="8">
+                    <RadzenCard>
+                        <RadzenTemplateForm TItem="RoleRow" Data="@role" Submit="SaveRoleAsync">
+                            <RadzenStack Gap="1rem">
+                                <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@(role.Id == 0 ? "New role" : $"Rights of {role.Name}")</RadzenText>
+                                @if (role.IsAdmin)
+                                {
+                                    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">
+                                        Admin always has every right and can't be changed.
+                                    </RadzenAlert>
+                                }
+                                <RadzenRow Gap="1rem">
+                                    <RadzenColumn Size="12" SizeMD="5">
+                                        <RadzenFormField Text="Role name *" Style="width:100%">
+                                            <RadzenTextBox Name="RoleName" @bind-Value="role.Name" MaxLength="50" Disabled="@role.IsAdmin" data-enter-first="true" />
+                                        </RadzenFormField>
+                                    </RadzenColumn>
+                                    <RadzenColumn Size="12" SizeMD="7">
+                                        <RadzenFormField Text="Description" Style="width:100%">
+                                            <RadzenTextBox Name="RoleDescription" @bind-Value="role.Description" MaxLength="200" Disabled="@role.IsAdmin" />
+                                        </RadzenFormField>
+                                    </RadzenColumn>
+                                </RadzenRow>
+
+                                <RadzenRow Gap="1rem">
+                                    @foreach (var group in Permissions.Groups)
+                                    {
+                                        <RadzenColumn Size="12" SizeMD="6">
+                                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween">
+                                                <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0">@group.Title</RadzenText>
+                                                @if (!role.IsAdmin)
+                                                {
+                                                    <RadzenButton Text="@(group.Items.All(i => Has(i.Name)) ? "Clear all" : "Select all")" Variant="Variant.Text" Size="ButtonSize.ExtraSmall" Click="@(() => ToggleGroup(group))" />
+                                                }
+                                            </RadzenStack>
+                                            <RadzenStack Gap="0.35rem" class="rz-mt-1 rz-mb-2">
+                                                @foreach (var item in group.Items)
+                                                {
+                                                    var id = "perm-" + item.Name.Replace('.', '-');
+                                                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                                        <RadzenCheckBox TValue="bool" Name="@id" Value="@Has(item.Name)" ValueChanged="@(v => Set(item.Name, v))"
+                                                                        Disabled="@role.IsAdmin" />
+                                                        <RadzenLabel Text="@item.Description" Component="@id" />
+                                                    </RadzenStack>
+                                                }
+                                            </RadzenStack>
+                                        </RadzenColumn>
+                                    }
+                                </RadzenRow>
+
+                                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                                    <RadzenButton ButtonType="ButtonType.Submit" Text="Save role" Icon="save" IsBusy="Busy" Disabled="@role.IsAdmin" />
+                                    <RadzenButton Text="Clear" ButtonStyle="ButtonStyle.Light" Click="NewRole" />
+                                </RadzenStack>
+                            </RadzenStack>
+                        </RadzenTemplateForm>
+                    </RadzenCard>
+                </RadzenColumn>
+            </RadzenRow>
+        </RadzenTabsItem>
+    </Tabs>
+</RadzenTabs>
+
+@code {
+    private List<UserRow> users = [];
+    private List<RoleRow> roles = [];
+    private bool loading = true;
+
+    private UserRow user = NewUserModel();
+    private string? password;
+    private bool mustChange = true;
+
+    private RoleRow role = new();
+    private HashSet<string> rights = [];
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            roles = await UserAdmin.GetRolesAsync();
+            users = await UserAdmin.GetUsersAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    // ---------- users ----------
+
+    private static UserRow NewUserModel() => new() { RoleId = AppRole.CashierId, IsActive = true };
+
+    private void EditUser(UserRow u)
+    {
+        user = new UserRow { Id = u.Id, UserName = u.UserName, FullName = u.FullName, RoleId = u.RoleId, IsActive = u.IsActive };
+        password = null;
+        mustChange = true;
+    }
+
+    private void ResetUser()
+    {
+        user = NewUserModel();
+        password = null;
+        mustChange = true;
+    }
+
+    private async Task SaveUserAsync()
+    {
+        if (await RunAsync(() => UserAdmin.SaveUserAsync(user, password, mustChange), "User saved"))
+        {
+            ResetUser();
+            await LoadAsync();
+        }
+    }
+
+    private async Task UnlockAsync(UserRow u)
+    {
+        if (await RunAsync(() => UserAdmin.UnlockAsync(u.Id), $"{u.UserName} unlocked"))
+            await LoadAsync();
+    }
+
+    private async Task DeleteUserAsync(UserRow u)
+    {
+        if (!await ConfirmAsync($"Delete user \"{u.UserName}\"? To keep their history, you can untick Active instead.")) return;
+        if (await RunAsync(() => UserAdmin.DeleteUserAsync(u.Id), "User deleted"))
+        {
+            if (user.Id == u.Id) ResetUser();
+            await LoadAsync();
+        }
+    }
+
+    // ---------- roles ----------
+
+    private bool Has(string permission) => role.IsAdmin || rights.Contains(permission);
+
+    private void Set(string permission, bool on)
+    {
+        if (on) rights.Add(permission); else rights.Remove(permission);
+    }
+
+    private void ToggleGroup(Permissions.Group group)
+    {
+        var on = !group.Items.All(i => Has(i.Name));
+        foreach (var i in group.Items) Set(i.Name, on);
+    }
+
+    private void NewRole()
+    {
+        role = new RoleRow();
+        rights = [];
+    }
+
+    private void EditRole(RoleRow r)
+    {
+        role = new RoleRow { Id = r.Id, Name = r.Name, Description = r.Description, IsAdmin = r.IsAdmin };
+        rights = [.. r.Permissions];
+    }
+
+    private async Task SaveRoleAsync()
+    {
+        role.Permissions = [.. rights];
+        if (await RunAsync(() => UserAdmin.SaveRoleAsync(role), "Role saved"))
+        {
+            await LoadAsync();
+            if (roles.FirstOrDefault(r => r.Name == role.Name.Trim()) is { } saved) EditRole(saved);
+        }
+    }
+
+    private async Task DeleteRoleAsync(RoleRow r)
+    {
+        if (!await ConfirmAsync($"Delete role \"{r.Name}\"?")) return;
+        if (await RunAsync(() => UserAdmin.DeleteRoleAsync(r.Id), "Role deleted"))
+        {
+            if (role.Id == r.Id) NewRole();
+            await LoadAsync();
+        }
+    }
+}

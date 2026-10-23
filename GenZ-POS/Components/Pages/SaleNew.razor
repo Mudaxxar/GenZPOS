@@ -1,0 +1,717 @@
+@page "/sales/new"
+@attribute [Authorize(Policy = Permissions.SalesCreate)]
+@inherits PageBase
+@inject SaleService Sales
+@inject ReportService Reports
+
+@* Till-style sale screen.
+   Left: page header (date, scanner) → item entry strip → cart (fills the height).
+   Right: checkout panel (customer, big total, discount, payment, balance, actions).
+   Keys: Enter moves between fields (wwwroot/js/enter-nav.js); F2 item · F4 customer · F6 return / exchange · F8 paid ·
+   F9 save & print (js/hotkeys.js).
+   Exchange (owner 2026-10-23): "Return item" adds pieces the customer brought back (ExchangeReturnDialog); they pay for
+   the new items first, the panel shows new − returned = to pay / to give back, and Save calls
+   SaleService.CreateExchangeAsync (invoice + return in one transaction; the receipt shows both). *@
+
+<div class="till-wrap">
+<div class="till">
+    <section class="till-main">
+        @* ---------- Header ---------- *@
+        <header class="till-header">
+            <div>
+                <h1 class="till-title">New Sale</h1>
+                <div class="till-subtitle">@Date(saleDate) · @(lines.Count == 0 ? "empty cart" : $"{lines.Count} item(s)")</div>
+            </div>
+            <div class="till-header-tools">
+                @if (Can(Permissions.SaleReturnsManage))
+                {
+                    <RadzenButton Text="Return item" Icon="assignment_return" ButtonStyle="ButtonStyle.Warning" Variant="Variant.Outlined"
+                                  Click="AddReturnAsync" data-hotkey="F6" title="Customer brings something back (exchange) — F6" />
+                }
+                <DateBox Label="Date" @bind-Value="saleDate" Style="width:165px" />
+            </div>
+        </header>
+
+        @* ---------- Returned items (exchange) ---------- *@
+        @if (HasReturns)
+        {
+            <div class="till-returns">
+                <div class="till-returns-head">
+                    <span><RadzenIcon Icon="assignment_return" /> Returned items <kbd>F6</kbd></span>
+                    <span class="money">− @Money(ReturnTotal)</span>
+                </div>
+                @foreach (var r in returns)
+                {
+                    var l = r.Candidate.Line;
+                    <div class="till-return-row">
+                        <div class="till-return-item">
+                            <div class="cart-item">@string.Join(" · ", new[] { l.ArticleNo, l.Barcode }.Where(s => !string.IsNullOrWhiteSpace(s)))</div>
+                            <div class="cart-sub">
+                                @string.Join(" · ", new[] { l.Colour, l.Size is { Length: > 0 } sz ? $"Size {sz}" : null, l.ProductName }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                                · invoice #@r.Candidate.SaleId (@Date(r.Candidate.SaleDate))
+                            </div>
+                        </div>
+                        <span class="cart-qty">@Qty(r.Qty)</span>
+                        <span class="cart-amount">− @Money(r.Amount)</span>
+                        <RadzenButton Icon="close" Size="ButtonSize.Small" Variant="Variant.Text" ButtonStyle="ButtonStyle.Danger"
+                                      title="Remove from the exchange" Click="@(() => RemoveReturn(r))" />
+                    </div>
+                }
+            </div>
+        }
+
+        @* ---------- Item entry strip (like New Purchase): Barcode (cursor starts here) → Item → Article no. · Colour · Size
+             (read-only, from the stock item) → Qty → Rate → [Add] → back to Barcode. Scanning fills the strip and moves to Qty. ---------- *@
+        <div class="till-entry" data-enter-group="true">
+            <BarcodeScanBox @ref="scanBox" Label="Barcode" Products="@products" Found="ScannedAsync" AutoFocus="true" EnterFirst="true" />
+            @* Type-ahead: matches show while typing (barcode, article no., product, colour, size); exact code first. *@
+            <RadzenFormField Text="Item  (F2)" class="entry-item">
+                <Start><RadzenIcon Icon="search" /></Start>
+                <ChildContent>
+                    <RadzenAutoComplete @bind-Value="itemText" @bind-Value:after="ItemTextChanged" Data="@itemMatches" TextProperty="DisplayName"
+                                        LoadData="SearchItems" SelectedItemChanged="ItemSelected" MinLength="1"
+                                        Placeholder="Type barcode, article no. or product…" data-hotkey="F2" Style="width:100%">
+                        <Template Context="p">
+                            @{ var item = (ProductLookup)p; }
+                            <div class="pick-row">
+                                <span class="pick-name">
+                                    <strong>@item.Barcode</strong> · @string.Join(" · ", new[] { item.ArticleNo, item.Company, item.Name, item.Colour, item.Size }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                                </span>
+                                <span class="pick-meta">
+                                    <span class="@(item.OnHand <= 0 ? "pick-stock out" : "pick-stock")">@Qty(item.OnHand) @item.Unit</span>
+                                    <span class="pick-price">@Money(item.SalePrice)</span>
+                                </span>
+                            </div>
+                        </Template>
+                    </RadzenAutoComplete>
+                </ChildContent>
+            </RadzenFormField>
+            @* Read-only, from the scanned / picked stock item. *@
+            <RadzenFormField Text="Article no." class="readonly-field">
+                <RadzenTextBox Value="@Picked?.ArticleNo" ReadOnly="true" tabindex="-1" />
+            </RadzenFormField>
+            <RadzenFormField Text="Colour" class="readonly-field">
+                <RadzenTextBox Value="@Picked?.Colour" ReadOnly="true" tabindex="-1" />
+            </RadzenFormField>
+            <RadzenFormField Text="Size" class="readonly-field">
+                <RadzenTextBox Value="@Picked?.Size" ReadOnly="true" tabindex="-1" />
+            </RadzenFormField>
+            @* One barcode per piece (owner): a stock item is one piece, so qty is always 1 — read-only. *@
+            <RadzenFormField Text="Qty" class="readonly-field">
+                <RadzenTextBox Value="1" ReadOnly="true" tabindex="-1" Style="text-align:right" />
+            </RadzenFormField>
+            <RadzenFormField Text="Rate (Rs)">
+                <RadzenNumeric @ref="rateBox" TValue="decimal" @bind-Value="pickRate" Min="0" ShowUpDown="false" Format="N2" TextAlign="TextAlign.Right" />
+            </RadzenFormField>
+            <RadzenButton Icon="add_shopping_cart" Text="Add" Click="AddPicked" Disabled="@(pickId is null)"
+                          class="till-add" data-enter-submit="true" />
+        </div>
+
+        @* ---------- Cart ---------- *@
+        <div class="till-cart" data-enter-group="true">
+            <RadzenDataGrid @ref="linesGrid" TItem="SaleLine" Data="@lines" GridLines="DataGridGridLines.Horizontal"
+                            RowRender="@CartRowRender" AllowPaging="false" Style="height:100%">
+                <EmptyTemplate>
+                    <div class="cart-empty">
+                        <RadzenIcon Icon="shopping_cart" />
+                        <div class="cart-empty-title">Cart is empty</div>
+                        <div>Scan a barcode or search an item above (F2) to start.</div>
+                    </div>
+                </EmptyTemplate>
+                <Columns>
+                    <RadzenDataGridColumn Title="#" Width="48px" TextAlign="TextAlign.Center">
+                        <Template><span class="cart-no">@(lines.IndexOf(context) + 1)</span></Template>
+                    </RadzenDataGridColumn>
+                    @* Barcode identifies the stock item; its article no. · colour · size underneath (like New Purchase). *@
+                    <RadzenDataGridColumn Title="Article · Barcode" Width="190px">
+                        <Template>
+                            @{ var b = Product(context.StockItemId); }
+                            <div class="cart-item">@b?.ArticleNo · @(b?.Barcode ?? "no barcode")</div>
+                            <div class="cart-sub">@string.Join(" · ", new[] { b?.Colour, b?.Size is { Length: > 0 } sz ? $"Size {sz}" : null }.Where(s => !string.IsNullOrWhiteSpace(s)))</div>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Item">
+                        <Template>
+                            @{ var p = Product(context.StockItemId); }
+                            <div class="cart-item" title="@p?.DisplayName">@p?.Name</div>
+                            <div class="cart-sub">
+                                @if (context.Qty > (p?.OnHand ?? 0))
+                                {
+                                    <span class="cart-warn">Only @Qty(p?.OnHand ?? 0) in stock</span>
+                                }
+                                else
+                                {
+                                    <span>@Qty(p?.OnHand ?? 0) @p?.Unit in stock</span>
+                                }
+                                @if (p is not null && context.Rate != p.SalePrice)
+                                {
+                                    <span> · list @Money(p.SalePrice)</span>
+                                }
+                                @if (p?.MinRate is { } minRate)
+                                {
+                                    @if (context.Rate < minRate)
+                                    {
+                                        <span class="cart-warn"> · lowest rate @Money(minRate) (max @(p.MaxDiscountPercent?.ToString("0.##"))% off)</span>
+                                    }
+                                    else
+                                    {
+                                        <span> · max @(p.MaxDiscountPercent?.ToString("0.##"))% off</span>
+                                    }
+                                }
+                            </div>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    @* One piece per barcode: qty is always 1, not editable (remove the line instead). *@
+                    <RadzenDataGridColumn Title="Qty" Width="70px" TextAlign="TextAlign.Center">
+                        <Template><span class="cart-qty">@Qty(context.Qty)</span></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Rate" Width="130px" TextAlign="TextAlign.Right">
+                        <Template>
+                            <RadzenNumeric TValue="decimal" @bind-Value="context.Rate" @bind-Value:after="ClampPaid" Min="0" ShowUpDown="false"
+                                           Format="N2" TextAlign="TextAlign.Right" Style="width:100%" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Amount" Width="140px" TextAlign="TextAlign.Right">
+                        <Template><span class="cart-amount">@Money(context.Qty * context.Rate)</span></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="52px" TextAlign="TextAlign.Center">
+                        <Template>
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" Variant="Variant.Text" ButtonStyle="ButtonStyle.Danger"
+                                          title="Remove" Click="@(() => RemoveLine(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </div>
+    </section>
+
+    @* ---------- Checkout panel: Customer → Discount → Paid → Cash → Notes → [Save & print] ---------- *@
+    <aside class="till-panel" data-enter-group="true">
+        <div class="panel-block">
+            <div class="panel-label">Customer <kbd>F4</kbd></div>
+            <div class="customer-row">
+                <RadzenDropDown TValue="int" OpenOnFocus="true" @bind-Value="customerId" @bind-Value:after="CustomerChangedAsync" Data="@customers"
+                                TextProperty="Label" ValueProperty="Id" AllowFiltering="true" Disabled="@HasReturns"
+                                title="@(HasReturns ? "An exchange is for the customer of the returned items" : null)"
+                                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" data-hotkey="F4" Style="flex:1; min-width:0" />
+                <RadzenButton Icon="person_add" Variant="Variant.Outlined" ButtonStyle="ButtonStyle.Primary" title="New customer" Click="AddCustomerAsync" />
+            </div>
+            <div class="customer-chip">
+                @if (IsWalkIn)
+                {
+                    <RadzenBadge BadgeStyle="BadgeStyle.Light" Variant="Variant.Flat" Text="Walk-in · cash only" />
+                }
+                else if (previousBalance > 0)
+                {
+                    <RadzenBadge BadgeStyle="BadgeStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"Owes {Money(previousBalance)}")" />
+                }
+                else if (previousBalance < 0)
+                {
+                    <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@($"Advance {Money(-previousBalance)}")" />
+                }
+                else
+                {
+                    <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Shade="Shade.Lighter" Text="No balance due" />
+                }
+            </div>
+        </div>
+
+        <div class="total-display @(GivingBack ? "giving-back" : null)">
+            @if (HasReturns)
+            {
+                <div class="total-label">@(GivingBack ? "To give back" : "To pay")</div>
+                <div class="total-amount">@Money(Owed)</div>
+                <div class="total-meta">New @Money(Total) − returned @Money(ReturnTotal)</div>
+            }
+            else
+            {
+                <div class="total-label">Total</div>
+                <div class="total-amount">@Money(Total)</div>
+                <div class="total-meta">@lines.Count item(s) · @Qty(TotalQty) qty</div>
+            }
+        </div>
+
+        <div class="panel-block panel-rows">
+            <div class="panel-row">
+                <span>Sub total</span>
+                <span class="money">@Money(SubTotal)</span>
+            </div>
+            <div class="panel-row discount-row">
+                <span>Discount</span>
+                <DiscountInput @bind-Value="discountValue" @bind-Value:after="ClampPaid" @bind-IsPercent="discountIsPercent" @bind-IsPercent:after="ClampPaid"
+                               SubTotal="@SubTotal" Max="@MaxDiscount" InputStyle="width:110px" />
+            </div>
+            @if (HasReturns)
+            {
+                <div class="panel-row">
+                    <span>New items total</span>
+                    <span class="money">@Money(Total)</span>
+                </div>
+                <div class="panel-row">
+                    <span>Returned items</span>
+                    <span class="money">− @Money(ReturnTotal)</span>
+                </div>
+                <div class="panel-row strong">
+                    <span>@(GivingBack ? "To give back" : "To pay")</span>
+                    <span class="money">@Money(Owed)</span>
+                </div>
+            }
+        </div>
+
+        <div class="panel-block panel-rows">
+            <div class="panel-row">
+                <span>@(GivingBack ? "Cash back now" : "Paid now") <kbd>F8</kbd></span>
+                <div class="row-input-group">
+                    <RadzenNumeric TValue="decimal" @bind-Value="paid" @bind-Value:after="PaidChanged" Min="0" ShowUpDown="false" Format="N2"
+                                   TextAlign="TextAlign.Right" class="row-input" data-hotkey="F8" />
+                    <RadzenButton Text="Exact" Size="ButtonSize.Small" Variant="Variant.Flat" ButtonStyle="ButtonStyle.Base" Click="PayFull" />
+                </div>
+            </div>
+            @if (!GivingBack)
+            {
+                <div class="panel-row">
+                    <span>Cash received</span>
+                    <RadzenNumeric TValue="decimal?" @bind-Value="tendered" @bind-Value:after="TenderedChanged" Min="0" ShowUpDown="false" Format="N2"
+                                   TextAlign="TextAlign.Right" Placeholder="optional" class="row-input"
+                                   title="Cash the customer handed over. Paid stays at the amount to pay; the rest is change." />
+                </div>
+            }
+            @if (!GivingBack && Owed > 0)
+            {
+                <div class="quick-cash">
+                    @foreach (var amount in QuickCash)
+                    {
+                        <RadzenButton Text="@amount.ToString("N0")" Size="ButtonSize.Small" Variant="Variant.Outlined" ButtonStyle="ButtonStyle.Base"
+                                      Click="@(() => Tender(amount))" />
+                    }
+                </div>
+            }
+            @if (Change > 0)
+            {
+                <div class="change-box">
+                    <span>Change to return</span>
+                    <span class="change-amount">@Money(Change)</span>
+                </div>
+            }
+            <div class="panel-row strong">
+                @if (GivingBack)
+                {
+                    <span>Kept as credit</span>
+                    <span class="money">@Money(Math.Max(Owed - paid, 0))</span>
+                }
+                else
+                {
+                    <span>Due on this invoice</span>
+                    <span class="money @(Owed - paid > 0 ? "danger" : "ok")">@Money(Math.Max(Owed - paid, 0))</span>
+                }
+            </div>
+            @if (IsWalkIn && paid < Owed)
+            {
+                <div class="panel-hint warn">
+                    @if (GivingBack)
+                    {
+                        <span>Walk-in customer has no account: give back the whole @Money(Owed). Press <strong>Exact</strong>.</span>
+                    }
+                    else
+                    {
+                        <span>Walk-in customer must pay in full. Press <strong>Exact</strong> or pick a customer to sell on credit.</span>
+                    }
+                </div>
+            }
+            @if (HasReturns && lines.Count == 0)
+            {
+                <div class="panel-hint warn">Add the new item(s) the customer takes. Only returning? Use Sales → invoice → Return items.</div>
+            }
+        </div>
+
+        @if (!IsWalkIn)
+        {
+            <div class="panel-block panel-rows">
+                <div class="panel-row muted">
+                    <span>Previous balance</span>
+                    <span class="money">@Money(previousBalance)</span>
+                </div>
+                <div class="panel-row strong">
+                    <span>New balance</span>
+                    <span class="money @(NewBalance > 0 ? "danger" : null)">@Money(NewBalance)</span>
+                </div>
+            </div>
+        }
+
+        <div class="panel-block">
+            <RadzenTextArea @bind-Value="notes" Rows="2" MaxLength="250" Placeholder="Notes (optional)" Style="width:100%; resize:none" />
+        </div>
+
+        <div class="panel-actions">
+            @if (DiscountProblem is { } problem)
+            {
+                <div class="save-blocked">@problem</div>
+            }
+            <RadzenButton Text="Save & Print  (F9)" Icon="print" Size="ButtonSize.Large" IsBusy="Busy"
+                          Click="@(() => SaveAsync(print: true))" Disabled="@(lines.Count == 0 || DiscountProblem is not null)"
+                          data-enter-submit="true" data-hotkey="F9" class="pay-button" />
+            <div class="panel-actions-row">
+                <RadzenButton Text="Save only" Icon="save" Variant="Variant.Outlined" IsBusy="Busy"
+                              Click="@(() => SaveAsync(print: false))" Disabled="@(lines.Count == 0 || DiscountProblem is not null)" />
+                <RadzenButton Text="Clear" Icon="restart_alt" Variant="Variant.Text" ButtonStyle="ButtonStyle.Base" Click="ClearAsync" />
+            </div>
+        </div>
+    </aside>
+</div>
+</div>
+
+@code {
+    private record CustomerOption(int Id, string Label);
+
+    private RadzenDataGrid<SaleLine> linesGrid = default!;
+    private List<ProductLookup> products = [];
+    private Dictionary<int, ProductLookup> productMap = [];
+    private List<CustomerOption> customers = [];
+
+    private DateTime saleDate = DateTime.Today;
+    private int customerId = Customer.WalkInId;
+    private decimal previousBalance, paid;
+
+    // Discount as typed (Rs, or % of the sub total — then it follows the cart); saved in rupees.
+    private decimal discountValue;
+    private bool discountIsPercent;
+    private decimal Discount => DiscountRules.Amount(SubTotal, discountValue, discountIsPercent);
+    private decimal? tendered; // cash handed over (optional) → shows change; never saved
+    private string? notes;
+    private List<SaleLine> lines = [];
+
+    private int? pickId;
+    private decimal pickRate;
+    private BarcodeScanBox scanBox = default!;
+    private RadzenNumeric<decimal> rateBox = default!;
+
+    /// <summary>The scanned / picked stock item (fills Article no., Colour, Size).</summary>
+    private ProductLookup? Picked => pickId is int id ? Product(id) : null;
+
+    // ---- Item type-ahead ----
+    private string? itemText;
+    private List<ProductLookup> itemMatches = [];
+
+    /// <summary>
+    /// Items that can still be added (owner): in stock and not already in the cart — one barcode is one piece, so a
+    /// piece in the cart disappears from the search (and comes back if its line is removed).
+    /// </summary>
+    private IEnumerable<ProductLookup> InStock => products.Where(p => p.OnHand > 0 && !lines.Any(l => l.StockItemId == p.Id));
+
+    /// <summary>
+    /// Matches for what is typed, in stock only: an exact barcode / article no. first, then items whose barcode,
+    /// article no., name, company, colour or size contain every typed word. At most 50.
+    /// </summary>
+    private void SearchItems(LoadDataArgs args)
+    {
+        var text = args.Filter?.Trim() ?? "";
+        if (text.Length == 0) { itemMatches = []; return; }
+        var exact = ProductLookup.MatchCode(InStock, text);
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var found = InStock.Where(p => words.All(w =>
+            new[] { p.Barcode, p.ArticleNo, p.Name, p.Company, p.Colour, p.Size }
+                .Any(s => s?.Contains(w, StringComparison.OrdinalIgnoreCase) == true)));
+        itemMatches = exact.Concat(found).Distinct().Take(50).ToList();
+    }
+
+    private void ItemSelected(object? selected)
+    {
+        if (selected is not ProductLookup item) return;
+        pickId = item.Id;
+        ItemPicked();
+    }
+
+    /// <summary>Text typed / scanned into Item without choosing from the list: an exact barcode or article no. picks it.</summary>
+    private void ItemTextChanged()
+    {
+        if (Picked is { } p && itemText == p.DisplayName) return;
+        var text = itemText?.Trim() ?? "";
+        var match = ProductLookup.MatchCode(InStock, text);
+        if (match.Count == 0 && text.Length > 0) { SearchItems(new LoadDataArgs { Filter = text }); match = itemMatches; }
+        if (match.Count == 1)
+        {
+            pickId = match[0].Id;
+            itemText = match[0].DisplayName;
+            ItemPicked();
+        }
+        else if (text.Length == 0)
+        {
+            pickId = null;
+        }
+    }
+
+    private bool IsWalkIn => customerId == Customer.WalkInId;
+    private decimal SubTotal => lines.Sum(l => Math.Round(l.Qty * l.Rate, 2));
+    private decimal Total => SubTotal - Discount;
+    private decimal TotalQty => lines.Sum(l => l.Qty);
+
+    // ---- Exchange: returned items pay for the new ones first ----
+    private List<ExchangePick> returns = [];
+    private bool HasReturns => returns.Count > 0;
+    private decimal ReturnTotal => returns.Sum(r => r.Amount);
+    /// <summary>New items − returned items: &gt; 0 the customer pays, &lt; 0 we give back.</summary>
+    private decimal Net => Total - ReturnTotal;
+    private bool GivingBack => Net < 0;
+    /// <summary>What is settled now: paid by the customer, or (GivingBack) given back. <see cref="paid"/> is at most this.</summary>
+    private decimal Owed => Math.Abs(Net);
+    /// <summary>Cash now: positive = customer pays, negative = given back (SaleService.CreateExchangeAsync).</summary>
+    private decimal CashNow => GivingBack ? -paid : paid;
+
+    private decimal NewBalance => previousBalance + Net - CashNow;
+    private decimal Change => !GivingBack && tendered is decimal t && t > paid ? t - paid : 0;
+
+    /// <summary>Note-sized amounts just above the amount to pay, e.g. 2,350 → 2,400 · 2,500 · 3,000 · 5,000.</summary>
+    private IEnumerable<decimal> QuickCash =>
+        new[] { 100m, 500m, 1000m, 5000m }
+            .Select(step => Math.Ceiling(Owed / step) * step)
+            .Where(a => a > Owed)
+            .Distinct()
+            .Take(4);
+
+    private ProductLookup? Product(int id) => productMap.GetValueOrDefault(id);
+
+    /// <summary>Most invoice discount the items allow (DiscountRules); null when no item in the cart has a limit.</summary>
+    private decimal? MaxDiscount =>
+        lines.Any(l => Product(l.StockItemId)?.MaxDiscountPercent is not null)
+            ? lines.Sum(l => Product(l.StockItemId) is { } p ? DiscountRules.Room(l.Qty, l.Rate, p.SalePrice, p.MaxDiscountPercent) : 0)
+            : null;
+
+    /// <summary>
+    /// Why the invoice can't be saved because of an item's maximum discount (null = fine). Same rule SaleService
+    /// enforces; checked here so Save stays disabled instead of failing.
+    /// </summary>
+    private string? DiscountProblem =>
+        lines.Any(l => Product(l.StockItemId)?.MinRate is { } min && l.Rate < min)
+            ? "A rate is below the item's lowest price (maximum discount)."
+            : MaxDiscount is { } max && Discount > max
+                ? $"Discount is more than the items allow (max {Money(max)})."
+                : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadLookupsAsync();
+    }
+
+    private Task<bool> LoadLookupsAsync() => RunAsync(async () =>
+    {
+        var list = await Reports.GetProductLookupAsync();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        customers = await db.Customers.AsNoTracking().Where(c => c.IsActive)
+            .OrderBy(c => c.Id == Customer.WalkInId ? 0 : 1).ThenBy(c => c.Name)
+            .Select(c => new CustomerOption(c.Id, c.Phone == null ? c.Name : c.Name + " (" + c.Phone + ")"))
+            .ToListAsync();
+        products = list;
+        productMap = list.ToDictionary(p => p.Id);
+    });
+
+    private async Task CustomerChangedAsync()
+    {
+        if (!await RunAsync(async () => previousBalance = await Reports.GetCustomerBalanceAsync(customerId)))
+            previousBalance = 0;
+    }
+
+    private void CartRowRender(RowRenderEventArgs<SaleLine> args)
+    {
+        if (args.Data is { } line && line.Qty > (Product(line.StockItemId)?.OnHand ?? 0))
+            args.Attributes["class"] = "cart-row-over";
+    }
+
+    // ---- Paid / cash tendered: Paid never goes above the total; extra cash is change. ----
+
+    private void PaidChanged()
+    {
+        if (paid <= Owed) return;
+        if (GivingBack)
+        {
+            paid = Owed; // can't give back more than the difference
+            return;
+        }
+        // Cashier typed the cash handed over into Paid: keep the amount to pay, show the rest as change.
+        tendered = paid;
+        paid = Owed;
+    }
+
+    private void TenderedChanged()
+    {
+        if (tendered is decimal t && !GivingBack)
+            paid = Math.Min(t, Owed);
+    }
+
+    private void Tender(decimal amount)
+    {
+        tendered = amount;
+        TenderedChanged();
+    }
+
+    private void PayFull()
+    {
+        paid = Owed;
+        tendered = null;
+    }
+
+    private void ClampPaid()
+    {
+        if (GivingBack) tendered = null;
+        if (tendered is not null) TenderedChanged();
+        else if (paid > Owed) paid = Owed;
+    }
+
+    /// <summary>F6: the customer brought something back — find it (barcode / invoice no.) and add it to this exchange.</summary>
+    private async Task AddReturnAsync()
+    {
+        var excluded = returns.Select(r => (r.Candidate.SaleId, r.Candidate.Line.StockItemId)).ToList();
+        if (await Dialogs.OpenAsync<ExchangeReturnDialog>("Return item (exchange)",
+                new Dictionary<string, object?> { [nameof(ExchangeReturnDialog.Excluded)] = excluded },
+                new DialogOptions { Width = "820px" }) is not List<ExchangePick> picked || picked.Count == 0)
+        {
+            await scanBox.FocusAsync();
+            return;
+        }
+
+        // An exchange is for the customer who bought the returned items.
+        var owner = HasReturns ? returns[0].Candidate.CustomerId : picked[0].Candidate.CustomerId;
+        if (picked.FirstOrDefault(p => p.Candidate.CustomerId != owner) is { } other)
+        {
+            Toast(NotificationSeverity.Warning,
+                $"Invoice #{other.Candidate.SaleId} was sold to {other.Candidate.CustomerName}; this exchange is for another customer. Do it separately.", 6000);
+        }
+        else
+        {
+            returns.AddRange(picked);
+            if (customerId != owner)
+            {
+                customerId = owner;
+                await CustomerChangedAsync();
+            }
+            ClampPaid();
+        }
+        await scanBox.FocusAsync(); // next: scan the new item(s)
+    }
+
+    private void RemoveReturn(ExchangePick r)
+    {
+        returns.Remove(r);
+        ClampPaid();
+    }
+
+    private async Task AddCustomerAsync()
+    {
+        var id = await Dialogs.OpenAsync<CustomerDialog>("Add customer",
+            new Dictionary<string, object?> { [nameof(CustomerDialog.CustomerId)] = 0 }, new DialogOptions { Width = "560px" });
+        if (id is int newId)
+        {
+            await LoadLookupsAsync();
+            customerId = newId;
+            await CustomerChangedAsync();
+        }
+    }
+
+    private void ItemPicked()
+    {
+        if (pickId is int id && Product(id) is { } p)
+        {
+            pickRate = p.SalePrice;
+            itemText = p.DisplayName;
+        }
+    }
+
+    /// <summary>A scanned barcode (or article no. → size / colour picker) fills the strip; the cursor goes to Rate (qty is always 1).</summary>
+    private async Task ScannedAsync(ProductLookup item)
+    {
+        if (item.OnHand <= 0)
+        {
+            Toast(NotificationSeverity.Warning, $"{item.Barcode} ({item.Name} {item.Colour} {item.Size}) is sold out — not in stock.", 5000);
+            await scanBox.FocusAsync();
+            return;
+        }
+        if (InCart(item.Id))
+        {
+            await scanBox.FocusAsync();
+            return;
+        }
+        pickId = item.Id;
+        ItemPicked();
+        StateHasChanged();
+        try { await rateBox.FocusAsync(); }
+        catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or InvalidOperationException) { /* page closing */ }
+    }
+
+    private async Task AddPicked()
+    {
+        if (pickId is not int id) return;
+        if (!InCart(id))
+            await AddLineAsync(id, pickRate);
+        pickId = null;
+        itemText = null;
+        pickRate = 0;
+        await scanBox.FocusAsync(); // ready for the next scan
+    }
+
+    /// <summary>One barcode = one piece: it can be in the cart only once (says so when it already is).</summary>
+    private bool InCart(int stockItemId)
+    {
+        if (!lines.Any(l => l.StockItemId == stockItemId)) return false;
+        var item = Product(stockItemId);
+        Toast(NotificationSeverity.Info, $"{item?.Barcode} is already in the cart (each barcode is one piece).", 4000);
+        return true;
+    }
+
+    private async Task AddLineAsync(int stockItemId, decimal rate)
+    {
+        lines.Add(new SaleLine { StockItemId = stockItemId, Qty = 1, Rate = rate });
+        ClampPaid();
+        await linesGrid.Reload();
+    }
+
+    private async Task RemoveLine(SaleLine line)
+    {
+        lines.Remove(line);
+        ClampPaid();
+        await linesGrid.Reload();
+    }
+
+    private async Task SaveAsync(bool print)
+    {
+        // Fresh entity each attempt so a failed save never leaves EF state behind.
+        var sale = new Sale
+        {
+            SaleDate = saleDate.Date,
+            CustomerId = customerId,
+            Discount = Discount,
+            Paid = paid,
+            Notes = notes,
+            Lines = lines.Select(l => new SaleLine { StockItemId = l.StockItemId, Qty = l.Qty, Rate = l.Rate }).ToList(),
+        };
+
+        var id = 0;
+        if (HasReturns)
+        {
+            // Exchange: invoice + return(s) in one transaction (the service sets Paid / Refunded from CashNow).
+            var back = returns.GroupBy(r => r.Candidate.SaleId)
+                .Select(g => new SaleReturn
+                {
+                    SaleId = g.Key,
+                    Lines = g.Select(r => new SaleReturnLine { StockItemId = r.Candidate.Line.StockItemId, Qty = r.Qty, Rate = r.Candidate.Line.Rate }).ToList(),
+                })
+                .ToList();
+            if (await RunAsync(async () => id = await Sales.CreateExchangeAsync(sale, back, CashNow), "Exchange saved"))
+                Nav.NavigateTo(print ? $"sales/{id}?print=true" : $"sales/{id}");
+            return;
+        }
+        if (await RunAsync(async () => id = await Sales.CreateAsync(sale), "Invoice saved"))
+            Nav.NavigateTo(print ? $"sales/{id}?print=true" : $"sales/{id}");
+    }
+
+    private async Task ClearAsync()
+    {
+        if ((lines.Count > 0 || HasReturns) && !await ConfirmAsync("Clear this invoice?")) return;
+        lines = [];
+        returns = [];
+        discountValue = paid = 0;
+        tendered = null;
+        notes = null;
+        saleDate = DateTime.Today;
+        customerId = Customer.WalkInId;
+        await CustomerChangedAsync();
+    }
+}

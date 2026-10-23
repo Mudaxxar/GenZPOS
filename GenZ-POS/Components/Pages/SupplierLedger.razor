@@ -1,0 +1,167 @@
+@page "/supplier-ledger"
+@page "/supplier-ledger/{SupplierId:int}"
+@attribute [Authorize(Policy = Permissions.SuppliersManage)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+@inject ShopInfo Shop
+
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="no-print">Supplier Ledger</RadzenText>
+
+<RadzenCard class="rz-mb-3 no-print" data-enter-group="true">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+        <RadzenFormField Text="Supplier" Style="min-width:300px; flex:1">
+            <RadzenDropDown TValue="int" OpenOnFocus="true" @bind-Value="supplierId" @bind-Value:after="LoadAsync" Data="@suppliers" TextProperty="Label" ValueProperty="Id"
+                            AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="Select supplier" />
+        </RadzenFormField>
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="LoadAsync" />
+        <RadzenButton Text="Show" Icon="search" Click="LoadAsync" Disabled="@(supplierId == 0)" IsBusy="@loading" class="rz-mb-2" data-enter-submit="true" />
+    </RadzenStack>
+    @if (supplierId > 0)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" class="rz-mt-2">
+            <RadzenButton Text="Pay supplier" Icon="payments" ButtonStyle="ButtonStyle.Success" Variant="Variant.Outlined" Size="ButtonSize.Small"
+                          Click="@(() => Nav.NavigateTo($"supplier-payments?supplier={supplierId}"))" />
+            <RadzenButton Text="Print" Icon="print" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@Desktop.PrintAsync" Disabled="@(ledger is null)" />
+            <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="ExportAsync" Disabled="@(ledger is null)" />
+        </RadzenStack>
+    }
+</RadzenCard>
+
+@if (ledger is not null)
+{
+    <RadzenCard>
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" class="rz-mb-2">
+            <div>
+                <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@Shop.Name — Supplier Statement</RadzenText>
+                <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0"><strong>@shownName</strong></RadzenText>
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@Date(shownFrom) to @Date(shownTo)</RadzenText>
+            </div>
+            <RadzenStack Gap="0.25rem" Style="width:280px">
+                <TotalLine Label="Opening (we owed)" Value="@Money(ledger.Opening)" />
+                <TotalLine Label="Bills, cash received back" Value="@Money(ledger.Rows.Sum(r => r.Debit))" />
+                <TotalLine Label="Paid, returned" Value="@Money(ledger.Rows.Sum(r => r.Credit))" />
+                <TotalLine Label="We owe now" Value="@Money(ledger.Closing)" Strong="true" Danger="@(ledger.Closing > 0)" />
+            </RadzenStack>
+        </RadzenStack>
+
+        <RadzenDataGrid TItem="LedgerRow" Data="@ledger.Rows" AllowPaging="true" PageSize="50" Density="Density.Compact"
+                        EmptyText="No entries in this period.">
+            <Columns>
+                <RadzenDataGridColumn Title="Date" Width="120px"><Template>@Date(context.Date)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Description">
+                    <Template>
+                        @if (context.Kind is "Purchase" or "Paid on bill")
+                        {
+                            <RadzenLink Path="@($"purchases/{context.RefId}/edit")" Text="@context.Description" />
+                        }
+                        else if (context.Kind is "Return" or "Cash received back")
+                        {
+                            <RadzenLink Path="@($"purchase-returns/{context.RefId}")" Text="@context.Description" />
+                        }
+                        else
+                        {
+                            @context.Description
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Debit (owe more)" Width="130px" TextAlign="TextAlign.Right"><Template>@(context.Debit == 0 ? "" : Money(context.Debit))</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Credit (owe less)" Width="130px" TextAlign="TextAlign.Right"><Template>@(context.Credit == 0 ? "" : Money(context.Credit))</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="We owe" Width="140px" TextAlign="TextAlign.Right"><Template><strong>@Money(context.Balance)</strong></Template></RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenCard>
+}
+
+@code {
+    private record SupplierOption(int Id, string Label);
+
+    [Parameter] public int? SupplierId { get; set; }
+
+    private List<SupplierOption> suppliers = [];
+    private int supplierId, loadVersion;
+    private int? routeId;
+    private bool loading;
+    private DateTime from = new(DateTime.Today.Year, 1, 1), to = DateTime.Today;
+
+    private CustomerLedger? ledger; // same shape for suppliers: Debit = we owe more, Credit = we owe less
+    private string shownName = "";
+    private DateTime shownFrom, shownTo;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            suppliers = await db.Suppliers.AsNoTracking().OrderBy(s => s.Name)
+                .Select(s => new SupplierOption(s.Id, s.Phone == null ? s.Name : s.Name + " (" + s.Phone + ")"))
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (SupplierId == routeId) return;
+        routeId = SupplierId;
+
+        if (SupplierId is int id)
+        {
+            supplierId = id;
+            await LoadAsync();
+        }
+        else
+        {
+            // /supplier-ledger/5 → /supplier-ledger (e.g. from the menu): start fresh.
+            loadVersion++;
+            supplierId = 0;
+            ledger = null;
+            shownName = "";
+            loading = false;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        if (supplierId == 0) { ledger = null; return; }
+        if (to < from) (from, to) = (to, from);
+
+        var version = ++loadVersion; // ignore results of an older, slower load
+        var (id, f, t) = (supplierId, from, to);
+        loading = true;
+        try
+        {
+            var result = await Reports.GetSupplierLedgerAsync(id, f, t);
+            if (version != loadVersion) return;
+            ledger = result;
+            shownName = suppliers.FirstOrDefault(s => s.Id == id)?.Label ?? "";
+            shownFrom = f;
+            shownTo = t;
+        }
+        catch (Exception ex)
+        {
+            if (version == loadVersion) ledger = null;
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (ledger is null) return;
+        var rows = new List<object?[]> { new object?[] { "Date", "Description", "Debit (owe more)", "Credit (owe less)", "We owe" } };
+        rows.Add([shownFrom, "Opening balance", null, null, ledger.Opening]);
+        rows.AddRange(ledger.Rows.Select(r => new object?[] { r.Date, r.Description, r.Debit, r.Credit, r.Balance }));
+
+        var name = string.Concat(shownName.Split(System.IO.Path.GetInvalidFileNameChars()));
+        var path = await Desktop.SaveTextFileAsync($"Supplier ledger - {name}.csv", "CSV files (*.csv)|*.csv", Csv(rows));
+        if (path is not null)
+            Toast(NotificationSeverity.Success, $"Saved to {path}");
+    }
+}

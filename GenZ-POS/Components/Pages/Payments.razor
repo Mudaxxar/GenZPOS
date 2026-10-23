@@ -1,0 +1,244 @@
+@page "/payments"
+@attribute [Authorize(Policy = Permissions.PaymentsReceive)]
+@inherits PageBase
+@inject ReportService Reports
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Receive Payment</RadzenText>
+    @if (model.CustomerId > 0)
+    {
+        <RadzenButton Text="Customer ledger" Icon="menu_book" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo($"ledger/{model.CustomerId}"))" />
+    }
+</RadzenStack>
+
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeMD="4">
+        <RadzenCard>
+            <RadzenTemplateForm TItem="CustomerPayment" Data="@model" Submit="SaveAsync">
+                <RadzenStack Gap="1rem">
+                    <RadzenFormField Text="Customer *" Style="width:100%">
+                        <RadzenDropDown TValue="int" OpenOnFocus="true" Name="CustomerId" @bind-Value="model.CustomerId" @bind-Value:after="CustomerChangedAsync"
+                                        Data="@customers" TextProperty="Label" ValueProperty="Id" AllowFiltering="true"
+                                        FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="Select customer" />
+                    </RadzenFormField>
+                    <RadzenDataAnnotationValidator Component="CustomerId" />
+
+                    @if (model.CustomerId > 0)
+                    {
+                        <TotalLine Label="@(balance < 0 ? "Advance (we owe them)" : "Current balance")" Value="@Money(Math.Abs(balance))" Strong="true" Danger="@(balance > 0)" />
+                    }
+
+                    <DateBox Label="Date" Name="PaymentDate" @bind-Value="model.PaymentDate" Style="width:100%" />
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                        <RadzenFormField Text="Amount *" Style="flex:1">
+                            <RadzenNumeric TValue="decimal" Name="Amount" @bind-Value="model.Amount" Min="0" ShowUpDown="false" Format="N2" />
+                        </RadzenFormField>
+                        <RadzenButton Text="Full balance" ButtonStyle="ButtonStyle.Light" Disabled="@(balance <= 0)" Click="@(() => model.Amount = balance)" />
+                    </RadzenStack>
+                    <RadzenDataAnnotationValidator Component="Amount" />
+                    <RadzenFormField Text="Method" Style="width:100%">
+                        <RadzenDropDown TValue="PaymentMethod" OpenOnFocus="true" Name="Method" @bind-Value="model.Method" Data="@(Enum.GetValues<PaymentMethod>())" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Notes (cheque #, bank ref…)" Style="width:100%">
+                        <RadzenTextBox Name="Notes" @bind-Value="model.Notes" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Save payment" Icon="save" IsBusy="Busy" />
+                </RadzenStack>
+            </RadzenTemplateForm>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeMD="8">
+        <RadzenCard>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+                <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" />
+                <RadzenFormField Text="Customer" Style="width:220px">
+                    <RadzenDropDown TValue="int?" @bind-Value="filterCustomerId" @bind-Value:after="ReloadAsync" Data="@filterCustomers" TextProperty="Label" ValueProperty="Id"
+                                    AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="All customers" />
+                </RadzenFormField>
+                <RadzenText TextStyle="TextStyle.Body1" class="rz-mb-3">Received: <strong>@Money(sum)</strong></RadzenText>
+            </RadzenStack>
+
+            <RadzenDataGrid @ref="grid" TItem="CustomerPayment" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                            AllowPaging="true" PageSize="15" ShowPagingSummary="true" Density="Density.Compact" EmptyText="No payments match these filters.">
+                <Columns>
+                    <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.PaymentDate)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Customer">
+                        <Template><RadzenLink Path="@($"ledger/{context.CustomerId}")" Text="@(context.Customer?.Name)" title="Open ledger" /></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Property="Method" Title="Method" Width="95px" />
+                    <RadzenDataGridColumn Property="Notes" Title="Notes" />
+                    <RadzenDataGridColumn Title="Amount" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Amount)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="70px" TextAlign="TextAlign.Right">
+                        <Template>
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private record CustomerOption(int Id, string Label);
+
+    /// <summary>Pre-selects a customer, e.g. from the Customers page or the ledger.</summary>
+    [SupplyParameterFromQuery(Name = "customer")] public int? PreselectCustomerId { get; set; }
+
+    private RadzenDataGrid<CustomerPayment> grid = default!;
+    private List<CustomerPayment>? rows; // null until first load → Radzen calls LoadData right after first render
+    private int count, loadVersion;
+    private bool loading = true;
+    private decimal sum, balance;
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+    private int? filterCustomerId;
+    private int? appliedPreselect;
+
+    private CustomerPayment model = new();
+    private List<CustomerOption> customers = [];
+    private List<CustomerOption> filterCustomers = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await LoadCustomersAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Also handles payments?customer=5 → payments?customer=7 while the page stays open.
+        if (PreselectCustomerId is int id && id != appliedPreselect)
+        {
+            appliedPreselect = id;
+            if (customers.All(c => c.Id != id))
+                await RefreshCustomerLabelsAsync(); // e.g. an inactive customer that wasn't in the list yet
+            model.CustomerId = id;
+            await CustomerChangedAsync();
+        }
+    }
+
+    private async Task LoadCustomersAsync()
+    {
+        var all = (await Reports.GetCustomerBalancesAsync()).Where(c => c.Id != Customer.WalkInId).ToList();
+
+        // Show what's due next to each name so the right customer is easy to pick.
+        customers = all
+            .Where(c => c.IsActive || c.Id == PreselectCustomerId || c.Id == model.CustomerId || c.Balance != 0)
+            .Select(c => new CustomerOption(c.Id, Label(c)))
+            .ToList();
+        filterCustomers = all.Select(c => new CustomerOption(c.Id, c.Name)).ToList();
+
+        static string Label(CustomerBalance c)
+        {
+            var name = string.IsNullOrEmpty(c.Phone) ? c.Name : $"{c.Name} ({c.Phone})";
+            return c.Balance > 0 ? $"{name}  —  owes {Money(c.Balance)}"
+                : c.Balance < 0 ? $"{name}  —  advance {Money(-c.Balance)}"
+                : name;
+        }
+    }
+
+    private async Task CustomerChangedAsync()
+    {
+        try
+        {
+            balance = model.CustomerId > 0 ? await Reports.GetCustomerBalanceAsync(model.CustomerId) : 0;
+        }
+        catch (Exception ex)
+        {
+            balance = 0;
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var end = to.Date.AddDays(1);
+            var q = db.CustomerPayments.AsNoTracking().Where(p => p.PaymentDate >= from.Date && p.PaymentDate < end);
+            if (filterCustomerId is not null) q = q.Where(p => p.CustomerId == filterCustomerId);
+            var c = await q.CountAsync();
+            var s = c == 0 ? 0 : await q.SumAsync(p => p.Amount);
+            var page = await q.Include(p => p.Customer).OrderByDescending(p => p.PaymentDate).ThenByDescending(p => p.Id)
+                .Skip(args.Skip ?? 0).Take(args.Top ?? 15).ToListAsync();
+            if (version != loadVersion) return;
+            (count, sum, rows) = (c, s, page);
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task SaveAsync()
+    {
+        if (model.Amount > balance)
+        {
+            var msg = balance > 0
+                ? $"Balance due is only {Money(balance)} but you are receiving {Money(model.Amount)}. The extra {Money(model.Amount - balance)} will be kept as advance. Save anyway?"
+                : $"This customer owes nothing. {Money(model.Amount)} will be kept as advance. Save anyway?";
+            if (!await ConfirmAsync(msg)) return;
+        }
+
+        var payment = new CustomerPayment
+        {
+            CustomerId = model.CustomerId,
+            PaymentDate = model.PaymentDate.Date,
+            Amount = model.Amount,
+            Method = model.Method,
+            Notes = string.IsNullOrWhiteSpace(model.Notes) ? null : model.Notes.Trim(),
+        };
+
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                db.CustomerPayments.Add(payment);
+                await db.SaveChangesAsync();
+            }, $"Payment of {Money(payment.Amount)} saved"))
+        {
+            // Keep customer, date and method: receipts are often entered in a batch for the same day.
+            model = new CustomerPayment { CustomerId = payment.CustomerId, PaymentDate = payment.PaymentDate, Method = payment.Method };
+            await CustomerChangedAsync();
+            await RefreshCustomerLabelsAsync();
+            await grid.Reload();
+        }
+    }
+
+    private async Task RefreshCustomerLabelsAsync()
+    {
+        try { await LoadCustomersAsync(); }
+        catch { /* labels are cosmetic; the payment itself is saved */ }
+    }
+
+    private async Task DeleteAsync(CustomerPayment p)
+    {
+        if (!await ConfirmAsync($"Delete payment of {Money(p.Amount)} from {p.Customer?.Name}?")) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await db.CustomerPayments.Where(x => x.Id == p.Id).ExecuteDeleteAsync();
+            }, "Payment deleted"))
+        {
+            await CustomerChangedAsync();
+            await RefreshCustomerLabelsAsync();
+            await grid.Reload();
+        }
+    }
+}

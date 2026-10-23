@@ -1,0 +1,90 @@
+@inject ShopInfo Shop
+
+@* A label drawn on screen from a LabelDesign: every element is a box in millimetres × PxPerMm, exactly where
+   Services/LabelPrinter.cs prints it. Read-only preview (Labels screen) or, with Interactive, the designer surface:
+   click selects, dragging an element moves it, dragging its corner handle resizes it (the page does the moving:
+   Pages/LabelDesigner.razor). Text size here is an estimate (the printer measures exactly), barcode bars are the real
+   Code 128 pattern. *@
+<div class="label-canvas @(Interactive ? "interactive" : null)"
+     style="width:@Px(Design.WidthMm)px; height:@Px(Design.HeightMm)px">
+    @foreach (var e in Design.Elements)
+    {
+        var selected = Interactive && e.Id == SelectedId;
+        <div class="lc-el @(selected ? "selected" : null) lc-@e.Field.ToString().ToLowerInvariant()"
+             style="left:@Px(e.X)px; top:@Px(e.Y)px; width:@Px(e.W)px; height:@Px(Math.Max(e.H, e.Field == LabelField.Line ? 0.3 : 0))px; justify-content:@Justify(e.Align)"
+             @onpointerdown="@(args => Down(e, false, args))" title="@(Interactive ? LabelDesign.FieldName(e.Field) : null)">
+            @switch (e.Field)
+            {
+                case LabelField.Logo:
+                    if (Shop.LogoDataUri is { } logo)
+                    {
+                        <img src="@logo" alt="logo" draggable="false" />
+                    }
+                    else if (Interactive)
+                    {
+                        <span class="lc-hint">Logo (Settings → Shop logo)</span>
+                    }
+                    break;
+                case LabelField.Line:
+                    break;
+                case LabelField.Barcode:
+                    <svg viewBox="0 0 @Code128.ModuleCount(Label.Barcode) 40" preserveAspectRatio="none" width="100%" height="100%">
+                        @foreach (var (x, w) in Bars(Label.Barcode))
+                        {
+                            <rect x="@x" y="0" width="@w" height="40" fill="#000" />
+                        }
+                    </svg>
+                    break;
+                default:
+                    var text = LabelDesign.TextFor(e, Label, Shop);
+                    <span style="font-size:@FontPx(e, text)px; font-weight:@(e.Bold ? 700 : 400)">@(text ?? (Interactive ? $"[{LabelDesign.FieldName(e.Field)}]" : ""))</span>
+                    break;
+            }
+            @if (selected)
+            {
+                <div class="lc-handle" title="Drag to resize" @onpointerdown="@(args => Down(e, true, args))" @onpointerdown:stopPropagation="true"></div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public LabelDesign Design { get; set; } = default!;
+    [Parameter, EditorRequired] public LabelData Label { get; set; } = default!;
+    /// <summary>Screen pixels per millimetre.</summary>
+    [Parameter] public double PxPerMm { get; set; } = 2.2;
+    [Parameter] public bool Interactive { get; set; }
+    [Parameter] public Guid? SelectedId { get; set; }
+    /// <summary>Designer: pointer pressed on an element (resize = on its corner handle).</summary>
+    [Parameter] public EventCallback<(LabelElement Element, bool Resize, PointerEventArgs Args)> ElementPointerDown { get; set; }
+
+    private string Px(double mm) => (mm * PxPerMm).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string Justify(LabelAlign a) => a switch { LabelAlign.Left => "flex-start", LabelAlign.Right => "flex-end", _ => "center" };
+
+    /// <summary>Points → pixels at this scale, shrunk (estimate for Arial) so one line fits the box like the printer does.</summary>
+    private string FontPx(LabelElement e, string? text)
+    {
+        var px = e.FontPt * 0.3528 * PxPerMm;                 // 1 pt = 0.3528 mm
+        px = Math.Min(px, e.H * PxPerMm * 0.86);
+        var chars = Math.Max(1, (text ?? LabelDesign.FieldName(e.Field)).Length);
+        px = Math.Min(px, e.W * PxPerMm / (chars * (e.Bold ? 0.6 : 0.55)));
+        return Math.Max(4, px).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private async Task Down(LabelElement e, bool resize, PointerEventArgs args)
+    {
+        if (Interactive) await ElementPointerDown.InvokeAsync((e, resize, args));
+    }
+
+    private static IEnumerable<(int X, int W)> Bars(string code)
+    {
+        var widths = Code128.Widths(code);
+        var x = 0;
+        for (var i = 0; i < widths.Length; i++)
+        {
+            if (i % 2 == 0) yield return (x, widths[i]);
+            x += widths[i];
+        }
+    }
+}

@@ -1,0 +1,170 @@
+@page "/reports/daybook"
+@attribute [Authorize(Policy = Permissions.ReportsDayBook)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="no-print">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Day Book (Cash)</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Print" Icon="print" ButtonStyle="ButtonStyle.Light" Click="PrintAsync" Disabled="@(book is null)" />
+        <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportAsync" Disabled="@(book is null)" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard class="rz-mb-3 no-print">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="LoadAsync" />
+        <RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="LoadAsync" IsBusy="@loading" class="rz-mb-2" />
+    </RadzenStack>
+</RadzenCard>
+
+@if (book is null)
+{
+    if (loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+    }
+}
+else
+{
+    <RadzenCard>
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem" class="rz-mb-2">
+            <ReportHeader Title="Day Book (cash in / out)" From="@shownFrom" To="@shownTo" />
+            <RadzenStack Gap="0.25rem" Style="width:300px">
+                <TotalLine Label="Cash in" Value="@Money(book.CashIn)" />
+                <TotalLine Label="Cash out" Value="@Money(book.CashOut)" />
+                <TotalLine Label="Net cash" Value="@Money(book.NetCash)" Strong="true" Danger="@(book.NetCash < 0)" />
+                <TotalLine Label="Bank / cheque received" Value="@Money(book.NonCashIn)" />
+                <TotalLine Label="Bank / cheque paid" Value="@Money(book.NonCashOut)" />
+            </RadzenStack>
+        </RadzenStack>
+
+        <RadzenDataGrid TItem="DayBookRow" Data="@book.Rows" AllowPaging="@(!printAll)" PageSize="100" ShowPagingSummary="true"
+                        Density="Density.Compact" EmptyText="No money in or out in this period.">
+            <Columns>
+                <RadzenDataGridColumn Title="Date" Width="110px"><Template>@Date(context.Date)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Time" Width="70px"><Template>@context.CreatedAt.ToString("HH:mm")</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Type" Width="190px">
+                    <Template>
+                        @context.Type
+                        @if (!string.IsNullOrEmpty(context.Notes))
+                        {
+                            <div class="rz-text-caption" style="white-space:normal">@context.Notes</div>
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Ref #" Width="150px">
+                    <Template><RadzenLink Path="@context.Link" Text="@context.RefText" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Party">
+                    <Template><RadzenLink Path="@context.PartyLink" Text="@context.Party" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Property="Method" Title="Method" Width="85px" />
+                <RadzenDataGridColumn Title="Cash in" Width="125px" TextAlign="TextAlign.Right">
+                    <Template>@(context.CashIn == 0 ? "" : Money(context.CashIn))</Template>
+                    <FooterTemplate><strong>@Money(book.CashIn)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Cash out" Width="125px" TextAlign="TextAlign.Right">
+                    <Template><span style="color:var(--rz-danger)">@(context.CashOut == 0 ? "" : Money(context.CashOut))</span></Template>
+                    <FooterTemplate><strong>@Money(book.CashOut)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Non-cash" Width="135px" TextAlign="TextAlign.Right">
+                    <Template>
+                        @if (context.NonCashIn != 0) { <span title="Received by bank / cheque">+ @Money(context.NonCashIn)</span> }
+                        @if (context.NonCashOut != 0) { <span title="Paid by bank / cheque" style="color:var(--rz-danger)">− @Money(context.NonCashOut)</span> }
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+
+        <RadzenRow Gap="1rem" class="rz-mt-3">
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mb-1">Cash summary</RadzenText>
+                <RadzenStack Gap="0.25rem">
+                    <TotalLine Label="Cash in" Value="@Money(book.CashIn)" />
+                    <TotalLine Label="Cash out" Value="@Money(book.CashOut)" />
+                    <TotalLine Label="Net cash (in − out)" Value="@Money(book.NetCash)" Strong="true" Danger="@(book.NetCash < 0)" />
+                    <TotalLine Label="Non-cash received (bank / cheque / other)" Value="@Money(book.NonCashIn)" />
+                    <TotalLine Label="Non-cash paid (bank / cheque / other)" Value="@Money(book.NonCashOut)" />
+                </RadzenStack>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mb-1">Business in this period</RadzenText>
+                <RadzenStack Gap="0.25rem">
+                    <TotalLine Label="@($"Sales ({book.Totals.Invoices} invoice(s))")" Value="@Money(book.Totals.Sales)" />
+                    <TotalLine Label="Of which on credit" Value="@Money(book.Totals.CreditSales)" Danger="@(book.Totals.CreditSales > 0)" />
+                    <TotalLine Label="Sales returns" Value="@Money(book.Totals.SaleReturns)" />
+                    <TotalLine Label="Net sales" Value="@Money(book.Totals.Sales - book.Totals.SaleReturns)" Strong="true" />
+                    <TotalLine Label="Purchases" Value="@Money(book.Totals.Purchases)" />
+                    <TotalLine Label="Purchase returns" Value="@Money(book.Totals.PurchaseReturns)" />
+                </RadzenStack>
+            </RadzenColumn>
+        </RadzenRow>
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0 no-print">
+            Cash = money paid at the counter, cash payments, refunds and cash back on returns. Bank / cheque / other payments are shown as non-cash.
+        </RadzenText>
+    </RadzenCard>
+}
+
+@code {
+    private DateTime from = DateTime.Today, to = DateTime.Today;
+    private DateTime shownFrom, shownTo;
+    private DayBookReport? book;
+    private bool loading, printAll;
+    private int loadVersion;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        var (f, t) = (from, to);
+        loading = true;
+        try
+        {
+            var result = await Reports.GetDayBookAsync(f, t);
+            if (version != loadVersion) return;
+            book = result;
+            (shownFrom, shownTo) = (f, t);
+            printAll = false;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        printAll = true; // print every row, not just the current page
+        StateHasChanged();
+        await Task.Delay(150);
+        await Desktop.PrintAsync();
+    }
+
+    private async Task ExportAsync()
+    {
+        if (book is null) return;
+        var lines = new List<object?[]> { new object?[] { "Date", "Time", "Type", "Ref #", "Party", "Method", "Notes", "Cash in", "Cash out", "Non-cash in", "Non-cash out" } };
+        lines.AddRange(book.Rows.Select(r => new object?[]
+            { r.Date, r.CreatedAt.ToString("HH:mm"), r.Type, r.RefText, r.Party, r.Method, r.Notes, r.CashIn, r.CashOut, r.NonCashIn, r.NonCashOut }));
+        lines.Add([null, null, "Total", null, null, null, null, book.CashIn, book.CashOut, book.NonCashIn, book.NonCashOut]);
+        lines.Add([null, null, "Net cash", null, null, null, null, book.NetCash, null, null, null]);
+        lines.Add([]);
+        lines.Add(["Sales", book.Totals.Sales]);
+        lines.Add(["Of which on credit", book.Totals.CreditSales]);
+        lines.Add(["Sales returns", book.Totals.SaleReturns]);
+        lines.Add(["Purchases", book.Totals.Purchases]);
+        lines.Add(["Purchase returns", book.Totals.PurchaseReturns]);
+
+        var name = shownFrom == shownTo ? $"{shownFrom:yyyy-MM-dd}" : $"{shownFrom:yyyy-MM-dd} to {shownTo:yyyy-MM-dd}";
+        var path = await Desktop.SaveTextFileAsync($"Day book {name}.csv", "CSV files (*.csv)|*.csv", Csv(lines));
+        if (path is not null)
+            Toast(NotificationSeverity.Success, $"Saved to {path}");
+    }
+}

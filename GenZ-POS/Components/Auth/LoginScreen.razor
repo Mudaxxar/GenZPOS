@@ -1,0 +1,87 @@
+@inject AuthService Auth
+@inject ShopInfo Shop
+@inject NavigationManager Nav
+
+@* Shown instead of the whole app until someone logs in (see Routes.razor). *@
+<div class="auth-screen">
+    <RadzenCard class="auth-card">
+        <RadzenStack Gap="1.25rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+                <RadzenImage Path="img/logo.png" AlternateText="" Style="width:44px; height:44px" />
+                <div>
+                    <RadzenText TextStyle="TextStyle.H5" TagName="TagName.H1" class="rz-m-0">@Shop.Name</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0 auth-muted">Log in to continue</RadzenText>
+                </div>
+            </RadzenStack>
+
+            <RadzenTemplateForm TItem="LoginModel" Data="@model" Submit="LoginAsync">
+                <RadzenStack Gap="1rem">
+                    <RadzenFormField Text="User name" Style="width:100%">
+                        <RadzenTextBox Name="UserName" @bind-Value="model.UserName" MaxLength="50" autofocus autocomplete="off" />
+                    </RadzenFormField>
+                    @* data-enter-skip: Enter in the password box logs in straight away. *@
+                    <RadzenFormField Text="Password" Style="width:100%">
+                        <RadzenPassword Name="Password" @bind-Value="model.Password" data-enter-skip="true" />
+                    </RadzenFormField>
+                    @if (error is not null)
+                    {
+                        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">@error</RadzenAlert>
+                    }
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Log in" Icon="login" IsBusy="busy" Style="width:100%" />
+                </RadzenStack>
+            </RadzenTemplateForm>
+
+            @if (firstRun)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0 auth-muted">
+                    First time? User <strong>admin</strong>, password <strong>admin</strong>. You'll be asked to choose a new password.
+                </RadzenText>
+            }
+        </RadzenStack>
+    </RadzenCard>
+    <div class="auth-version">GenZ-POS v@(AppConfig.Version)</div>
+</div>
+
+@code {
+    private readonly LoginModel model = new();
+    private string? error;
+    private bool busy, firstRun;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            firstRun = await Auth.IsFirstRunAsync();
+        }
+        catch (Exception ex)
+        {
+            error = PageBase.FriendlyMessage(ex);
+        }
+    }
+
+    private async Task LoginAsync()
+    {
+        busy = true;
+        error = null;
+        try
+        {
+            await Auth.LoginAsync(model.UserName, model.Password);
+            Nav.NavigateTo("");
+        }
+        catch (Exception ex)
+        {
+            model.Password = "";
+            error = PageBase.FriendlyMessage(ex);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private class LoginModel
+    {
+        public string UserName { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+}

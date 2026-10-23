@@ -1,0 +1,154 @@
+@page "/suppliers"
+@attribute [Authorize(Policy = Permissions.SuppliersManage)]
+@inherits PageBase
+@inject ReportService Reports
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Suppliers</RadzenText>
+    <RadzenButton Text="Payables report" Icon="call_made" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("reports/payables"))" />
+</RadzenStack>
+
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeMD="4">
+        <RadzenCard>
+            <RadzenTemplateForm TItem="Supplier" Data="@model" Submit="SaveAsync">
+                <RadzenStack Gap="1rem">
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@(model.Id == 0 ? "New supplier" : "Edit supplier")</RadzenText>
+                    <RadzenFormField Text="Name *">
+                        <RadzenTextBox Name="Name" @bind-Value="model.Name" MaxLength="120" />
+                    </RadzenFormField>
+                    <RadzenDataAnnotationValidator Component="Name" />
+                    <RadzenFormField Text="Phone">
+                        <RadzenTextBox Name="Phone" @bind-Value="model.Phone" MaxLength="30" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Address">
+                        <RadzenTextArea Name="Address" @bind-Value="model.Address" Rows="2" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Opening balance (we already owed)">
+                        <RadzenNumeric TValue="decimal" Name="OpeningBalance" @bind-Value="model.OpeningBalance" ShowUpDown="false" Format="N2" />
+                    </RadzenFormField>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenCheckBox Name="IsActive" @bind-Value="model.IsActive" /> <RadzenLabel Text="Active" Component="IsActive" />
+                    </RadzenStack>
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                        <RadzenButton ButtonType="ButtonType.Submit" Text="Save" Icon="save" IsBusy="Busy" />
+                        <RadzenButton Text="Clear" ButtonStyle="ButtonStyle.Light" Click="Reset" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenTemplateForm>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeMD="8">
+        <RadzenCard>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+                <RadzenTextBox Placeholder="Search name or phone…" @bind-Value="search" @bind-Value:after="LoadAsync" Style="flex:1; min-width:180px" />
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                    <RadzenCheckBox Name="OnlyDue" @bind-Value="onlyDue" />
+                    <RadzenLabel Text="Only with balance" Component="OnlyDue" />
+                </RadzenStack>
+                <RadzenText TextStyle="TextStyle.Subtitle1" class="rz-m-0">Total payable: <strong style="@(Payable > 0 ? "color:var(--rz-danger)" : null)">@Money(Payable)</strong></RadzenText>
+            </RadzenStack>
+
+            <RadzenDataGrid TItem="SupplierBalance" Data="@Visible" IsLoading="@loading" AllowPaging="true" PageSize="15" AllowSorting="true"
+                            ShowPagingSummary="true" Density="Density.Compact" EmptyText="No suppliers found.">
+                <Columns>
+                    <RadzenDataGridColumn Property="Name" Title="Name">
+                        <Template>
+                            <RadzenLink Path="@($"supplier-ledger/{context.Id}")" Text="@context.Name" title="Open ledger" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Property="Phone" Title="Phone" Width="130px" />
+                    <RadzenDataGridColumn Property="Address" Title="Address" />
+                    <RadzenDataGridColumn Property="Balance" Title="We owe" Width="130px" TextAlign="TextAlign.Right">
+                        <Template>
+                            <span style="@(context.Balance > 0 ? "color:var(--rz-danger);font-weight:600" : null)">@Money(context.Balance)</span>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="190px" Sortable="false" TextAlign="TextAlign.Right">
+                        <Template>
+                            @if (!context.IsActive) { <RadzenBadge BadgeStyle="BadgeStyle.Light" Text="Inactive" class="rz-me-1" /> }
+                            <RadzenButton Icon="menu_book" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Info" Variant="Variant.Outlined" title="Ledger"
+                                          Click="@(() => Nav.NavigateTo($"supplier-ledger/{context.Id}"))" />
+                            <RadzenButton Icon="payments" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Success" Variant="Variant.Outlined" title="Pay supplier"
+                                          Click="@(() => Nav.NavigateTo($"supplier-payments?supplier={context.Id}"))" />
+                            <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Edit" Click="@(() => Edit(context))" />
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private Supplier model = new();
+    private List<SupplierBalance> items = [];
+    private string? search;
+    private bool onlyDue, loading = true;
+    private int loadVersion;
+
+    private IEnumerable<SupplierBalance> Visible => onlyDue ? items.Where(s => s.Balance != 0) : items;
+    private decimal Payable => items.Where(s => s.Balance > 0).Sum(s => s.Balance);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var version = ++loadVersion; // ignore results of an older, slower search
+        loading = true;
+        try
+        {
+            var result = await Reports.GetSupplierBalancesAsync(string.IsNullOrWhiteSpace(search) ? null : search.Trim());
+            if (version == loadVersion) items = result;
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private void Edit(SupplierBalance s) => model = new Supplier
+    {
+        Id = s.Id, Name = s.Name, Phone = s.Phone, Address = s.Address, OpeningBalance = s.OpeningBalance, IsActive = s.IsActive,
+    };
+
+    private void Reset() => model = new();
+
+    private async Task SaveAsync()
+    {
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                model.Name = model.Name.Trim();
+                model.Phone = string.IsNullOrWhiteSpace(model.Phone) ? null : model.Phone.Trim();
+                model.Address = string.IsNullOrWhiteSpace(model.Address) ? null : model.Address.Trim();
+                if (model.Id == 0) db.Suppliers.Add(model); else db.Suppliers.Update(model);
+                await db.SaveChangesAsync();
+            }, "Supplier saved"))
+        {
+            Reset();
+            await LoadAsync();
+        }
+    }
+
+    private async Task DeleteAsync(SupplierBalance s)
+    {
+        if (!await ConfirmAsync($"Delete supplier \"{s.Name}\"? Suppliers with purchases or payments can't be deleted.")) return;
+        if (await RunAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                db.Suppliers.Remove(new Supplier { Id = s.Id });
+                await db.SaveChangesAsync();
+            }, "Deleted"))
+        {
+            if (model.Id == s.Id) Reset();
+            await LoadAsync();
+        }
+    }
+}

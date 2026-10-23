@@ -1,0 +1,203 @@
+@page "/stock/history"
+@page "/stock/{ProductId:int}/history"
+@attribute [Authorize(Policy = Permissions.StockView)]
+@inherits PageBase
+@inject ReportService Reports
+@inject DesktopService Desktop
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="no-print">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Item History (stock card)</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Stock report" Icon="inventory" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("stock"))" />
+        <RadzenButton Text="Print" Icon="print" ButtonStyle="ButtonStyle.Light" Click="PrintAsync" Disabled="@(card is null)" />
+        <RadzenButton Text="Export CSV" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportAsync" Disabled="@(card is null)" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard class="rz-mb-3 no-print" data-enter-group="true">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+        @* A scan picks the product and shows its card straight away (SelectProduct → URL → load). *@
+        <BarcodeScanBox Products="@products" Found="@(p => SelectProduct(p.Id))" Style="width:240px" />
+        <RadzenFormField Text="Product" Style="min-width:340px; flex:1">
+            <RadzenDropDown TValue="int" OpenOnFocus="true" Value="@productId" ValueChanged="@((int id) => SelectProduct(id))" Data="@products"
+                            TextProperty="DisplayName" ValueProperty="Id" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                            AllowVirtualization="true" Placeholder="Select product" data-enter-first="true" />
+        </RadzenFormField>
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="LoadAsync" />
+        <RadzenButton Text="Show" Icon="search" Click="LoadAsync" Disabled="@(productId == 0)" IsBusy="@loading" class="rz-mb-2" data-enter-submit="true" />
+    </RadzenStack>
+</RadzenCard>
+
+@if (card is not null)
+{
+    <RadzenCard>
+        @if (card.Product is null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">This product no longer exists.</RadzenAlert>
+        }
+        else
+        {
+            var p = card.Product;
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="1rem" class="rz-mb-2">
+                <ReportHeader Title="Stock card" From="@shownFrom" To="@shownTo">
+                    <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">
+                        <strong>@p.DisplayName</strong>
+                        @if (!p.IsActive) { <RadzenBadge BadgeStyle="BadgeStyle.Light" Text="Inactive" class="rz-ms-1" /> }
+                    </RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+                        In stock now: <strong>@Qty(p.OnHand) @p.Unit</strong> · Cost @Money(p.PurchasePrice) · Price @Money(p.SalePrice)
+                        @if (p.ReorderLevel > 0) { <span> · Reorder at @Qty(p.ReorderLevel)</span> }
+                    </RadzenText>
+                </ReportHeader>
+                <RadzenStack Gap="0.25rem" Style="width:280px">
+                    <TotalLine Label="Opening qty" Value="@($"{Qty(card.Opening)} {p.Unit}")" />
+                    <TotalLine Label="In" Value="@Qty(card.Rows.Sum(r => r.QtyIn))" />
+                    <TotalLine Label="Out" Value="@Qty(card.Rows.Sum(r => r.QtyOut))" />
+                    <TotalLine Label="Closing qty" Value="@($"{Qty(card.Closing)} {p.Unit}")" Strong="true" Danger="@(card.Closing <= 0)" />
+                </RadzenStack>
+            </RadzenStack>
+        }
+
+        <RadzenDataGrid TItem="StockCardRow" Data="@card.Rows" AllowPaging="@(!printAll)" PageSize="50" ShowPagingSummary="true"
+                        Density="Density.Compact" EmptyText="No stock movements in this period.">
+            <Columns>
+                <RadzenDataGridColumn Title="Date" Width="120px">
+                    <Template>@Date(context.Date)</Template>
+                    <FooterTemplate><strong>Closing</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Type / reference">
+                    <Template>
+                        @if (context.Link is string link)
+                        {
+                            <RadzenLink Path="@link" Text="@context.Description" />
+                        }
+                        else
+                        {
+                            @context.Description
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="In" Width="110px" TextAlign="TextAlign.Right">
+                    <Template>@(context.QtyIn == 0 ? "" : Qty(context.QtyIn))</Template>
+                    <FooterTemplate><strong>@Qty(card.Rows.Sum(r => r.QtyIn))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Out" Width="110px" TextAlign="TextAlign.Right">
+                    <Template><span style="color:var(--rz-danger)">@(context.QtyOut == 0 ? "" : Qty(context.QtyOut))</span></Template>
+                    <FooterTemplate><strong>@Qty(card.Rows.Sum(r => r.QtyOut))</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Balance" Width="120px" TextAlign="TextAlign.Right">
+                    <Template><strong>@Qty(context.Balance)</strong></Template>
+                    <FooterTemplate><strong>@Qty(card.Closing)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
+            Opening qty = stock before @Date(shownFrom): @Qty(card.Opening). Balance runs from there.
+        </RadzenText>
+    </RadzenCard>
+}
+else if (loading)
+{
+    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+}
+
+@code {
+    [Parameter] public int? ProductId { get; set; }
+
+    private List<ProductLookup> products = [];
+    private int productId, loadVersion;
+    private int? routeId;
+    private bool loading, printAll;
+    private DateTime from = new(DateTime.Today.Year, 1, 1), to = DateTime.Today;
+    private DateTime shownFrom, shownTo;
+    private StockCard? card;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            products = await Reports.GetProductLookupAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ProductId == routeId) return;
+        routeId = ProductId;
+
+        if (ProductId is int id)
+        {
+            productId = id;
+            await LoadAsync();
+        }
+        else
+        {
+            // /stock/5/history → /stock/history (e.g. from the menu): start fresh.
+            loadVersion++;
+            productId = 0;
+            card = null;
+            loading = false;
+        }
+    }
+
+    /// <summary>Picking a product changes the URL, so Back / links work; OnParametersSet then loads it.</summary>
+    private void SelectProduct(int id)
+    {
+        productId = id;
+        if (id > 0 && id != ProductId)
+            Nav.NavigateTo($"stock/{id}/history");
+    }
+
+    private async Task LoadAsync()
+    {
+        if (productId == 0) { card = null; return; }
+        if (to < from) (from, to) = (to, from);
+
+        var version = ++loadVersion; // ignore results of an older, slower load
+        var (id, f, t) = (productId, from, to);
+        loading = true;
+        try
+        {
+            var result = await Reports.GetStockCardAsync(id, f, t);
+            if (version != loadVersion) return;
+            card = result;
+            (shownFrom, shownTo) = (f, t);
+            printAll = false;
+        }
+        catch (Exception ex)
+        {
+            if (version == loadVersion) card = null;
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        printAll = true; // print every row, not just the current page
+        StateHasChanged();
+        await Task.Delay(150);
+        await Desktop.PrintAsync();
+    }
+
+    private async Task ExportAsync()
+    {
+        if (card is null) return;
+        var lines = new List<object?[]> { new object?[] { "Date", "Type / reference", "In", "Out", "Balance" } };
+        lines.Add([shownFrom, "Opening qty", null, null, card.Opening]);
+        lines.AddRange(card.Rows.Select(r => new object?[] { r.Date, r.Description, r.QtyIn, r.QtyOut, r.Balance }));
+        lines.Add([shownTo, "Closing qty", card.Rows.Sum(r => r.QtyIn), card.Rows.Sum(r => r.QtyOut), card.Closing]);
+
+        var name = string.Concat((card.Product?.DisplayName ?? $"Product {productId}").Split(System.IO.Path.GetInvalidFileNameChars()));
+        var path = await Desktop.SaveTextFileAsync($"Stock card - {name}.csv", "CSV files (*.csv)|*.csv", Csv(lines));
+        if (path is not null)
+            Toast(NotificationSeverity.Success, $"Saved to {path}");
+    }
+}

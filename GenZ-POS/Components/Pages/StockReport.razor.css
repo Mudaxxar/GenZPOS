@@ -1,0 +1,31 @@
+/* Group header / row content rendered by this page's templates. (Styles for the grid's own parts, e.g. hiding the
+   group panel and greying sold rows, are in wwwroot/css/app.css: scoped CSS can't reach inside RadzenDataGrid.) */
+.article-head {
+    font-size: 0.95rem;
+}
+
+.article-meta {
+    opacity: 0.7;
+}
+
+.article-stock {
+    margin-left: 0.75rem;
+    padding: 1px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    background: var(--rz-success-lighter, #e6f4ea);
+    color: var(--rz-success-darker, #1e6b34);
+}
+
+.article-stock.out {
+    background: var(--rz-base-200, #eee);
+    color: var(--rz-base-700, #555);
+}
+
+.sold-tag {
+    margin-left: 0.5rem;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    background: var(--rz-base-200);
+}

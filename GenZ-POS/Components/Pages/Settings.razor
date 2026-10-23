@@ -1,0 +1,287 @@
+@page "/settings"
+@attribute [Authorize(Policy = Permissions.SettingsManage)]
+@inherits PageBase
+@implements IDisposable
+@inject ShopInfo Shop
+@inject BackupService Backup
+@inject AppConfig Config
+@inject DesktopService Desktop
+
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Settings &amp; Backup</RadzenText>
+
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeLG="6">
+        @* ---------- Shop details ---------- *@
+        <RadzenCard class="rz-mb-3">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">Shop details</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-3" Style="opacity:0.7">Shown in the header, on invoices and on statements.</RadzenText>
+
+            <RadzenTemplateForm TItem="ShopForm" Data="@form" Submit="SaveShopAsync">
+                <RadzenStack Gap="1rem">
+                    <RadzenFormField Text="Shop name *" Style="width:100%">
+                        <RadzenTextBox Name="ShopNameBox" @bind-Value="form.Name" MaxLength="100" data-enter-first="true" />
+                    </RadzenFormField>
+                    <RadzenRequiredValidator Component="ShopNameBox" Text="Shop name is required" />
+
+                    <RadzenFormField Text="Mobile (printed on receipts and invoices)" Style="width:100%">
+                        <RadzenTextBox Name="ShopPhone" @bind-Value="form.Phone" MaxLength="50" />
+                    </RadzenFormField>
+
+                    <RadzenFormField Text="Address (printed on receipts and invoices)" Style="width:100%">
+                        <RadzenTextArea Name="ShopAddress" @bind-Value="form.Address" Rows="2" MaxLength="250" />
+                    </RadzenFormField>
+
+                    <RadzenFormField Text="Invoice footer (e.g. thank-you note, return policy)" Style="width:100%">
+                        <RadzenTextArea Name="InvoiceFooter" @bind-Value="form.Footer" Rows="2" MaxLength="300" />
+                    </RadzenFormField>
+
+                    <RadzenFormField Text="Print invoices on" Style="width:100%">
+                        <RadzenDropDown TValue="PrintFormat" OpenOnFocus="true" Name="PrintFormat" @bind-Value="form.PrintFormat"
+                                        Data="@printFormats" TextProperty="Text" ValueProperty="Value" />
+                    </RadzenFormField>
+
+                    @* Logo: saved at once when chosen / removed (Save is for the text fields). *@
+                    <div>
+                        <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mb-1">Shop logo (top of receipts and invoices)</RadzenText>
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem" Wrap="FlexWrap.Wrap">
+                            <div class="logo-box">
+                                @if (Shop.LogoDataUri is { } logo)
+                                {
+                                    <img src="@logo" alt="Shop logo" />
+                                }
+                                else
+                                {
+                                    <span>No logo</span>
+                                }
+                            </div>
+                            <RadzenStack Gap="0.5rem">
+                                <RadzenButton Text="@(Shop.Logo is null ? "Choose logo…" : "Change logo…")" Icon="image" ButtonStyle="ButtonStyle.Light"
+                                              IsBusy="@savingLogo" Click="ChooseLogoAsync" />
+                                @if (Shop.Logo is not null)
+                                {
+                                    <RadzenButton Text="Remove logo" Icon="delete" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined"
+                                                  Size="ButtonSize.Small" Click="RemoveLogoAsync" />
+                                }
+                            </RadzenStack>
+                        </RadzenStack>
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" class="rz-mt-2">
+                            <RadzenCheckBox TValue="bool" Name="ShowNameWithLogo" @bind-Value="form.ShowNameWithLogo" />
+                            <RadzenLabel Text="Also print the shop name under the logo (leave off if the logo already shows it)" Component="ShowNameWithLogo" />
+                        </RadzenStack>
+                    </div>
+
+                    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
+                        <RadzenButton ButtonType="ButtonType.Submit" Text="Save" Icon="save" IsBusy="@savingShop" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenTemplateForm>
+        </RadzenCard>
+
+        @* ---------- Barcode label ---------- *@
+        <RadzenCard class="rz-mb-3">
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.75rem">
+                <div>
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">Barcode label</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" Style="opacity:.7">
+                        @Shop.LabelDesign.WidthMm.ToString("0.#") × @Shop.LabelDesign.HeightMm.ToString("0.#") mm ·
+                        size and layout of the price / barcode labels (drag and drop)
+                    </RadzenText>
+                </div>
+                <RadzenButton Text="Design label…" Icon="design_services" Click="@(() => Nav.NavigateTo("settings/label-design"))" />
+            </RadzenStack>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeLG="6">
+        @* ---------- Backup ---------- *@
+        <RadzenCard class="rz-mb-3">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Backup</RadzenText>
+
+            @if (!Backup.IsLocalServer)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                    This computer uses the database on <strong>@Config.ServerName</strong>.
+                    Backups are made on that computer: open GenZ-POS there and use this page.
+                </RadzenAlert>
+            }
+            else
+            {
+                <table style="width:100%; border-collapse:collapse">
+                    <tbody>
+                        <tr><td style="@labelStyle">Backup folder</td><td style="word-break:break-all">@Backup.Folder</td></tr>
+                        <tr>
+                            <td style="@labelStyle">Last backup</td>
+                            <td>
+                                @if (Backup.LastBackupAt is { } at)
+                                {
+                                    <span style="@(BackupIsOld ? "color:var(--rz-danger); font-weight:600" : null)">@Date(at) @at.ToString("HH:mm")</span>
+                                }
+                                else
+                                {
+                                    <span style="color:var(--rz-danger); font-weight:600">Never</span>
+                                }
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="@labelStyle">Automatic</td>
+                            <td>@(Config.AutoBackupDaily ? $"Once a day while GenZ-POS is open (newest {Config.KeepBackups} kept)" : "Off (turned off in the settings file)")</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                @if (Backup.LastError is { } error)
+                {
+                    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-mt-2" Title="Last backup failed">
+                        @error
+                    </RadzenAlert>
+                }
+
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" class="rz-my-3" Wrap="FlexWrap.Wrap">
+                    <RadzenButton Text="Backup now" Icon="backup" IsBusy="@(backingUp || Backup.IsRunning)" BusyText="Backing up…" Click="BackupNowAsync" />
+                    <RadzenButton Text="Copy latest backup to…" Icon="usb" ButtonStyle="ButtonStyle.Secondary" Disabled="@(backups.Count == 0)" Click="@(() => CopyAsync(backups.FirstOrDefault()))" />
+                    <RadzenButton Text="Open backup folder" Icon="folder_open" ButtonStyle="ButtonStyle.Light" Click="@(() => Open(Backup.Folder))" />
+                </RadzenStack>
+
+                <RadzenDataGrid TItem="BackupFile" Data="@backups" AllowPaging="true" PageSize="8" Density="Density.Compact" EmptyText="No backups yet. Press Backup now.">
+                    <Columns>
+                        <RadzenDataGridColumn Property="Name" Title="File" />
+                        <RadzenDataGridColumn Property="CreatedAt" Title="Date" Width="150px">
+                            <Template>@Date(context.CreatedAt) @context.CreatedAt.ToString("HH:mm")</Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Property="SizeBytes" Title="Size" Width="90px" TextAlign="TextAlign.Right">
+                            <Template>@context.SizeText</Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="" Width="70px" Sortable="false" TextAlign="TextAlign.Center">
+                            <Template>
+                                <RadzenButton Icon="content_copy" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light" title="Copy this backup to…" Click="@(() => CopyAsync(context))" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            }
+
+            <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-4 rz-mb-1">Keep a copy away from this computer</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2">
+                Once a week, plug in a USB drive and press <strong>Copy latest backup to…</strong>.
+                If this computer breaks or is stolen, that copy is your shop's data.
+            </RadzenText>
+
+            <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-3 rz-mb-1">How to restore a backup</RadzenText>
+            <ol style="margin:0; padding-left:1.25rem; font-size:0.875rem">
+                <li>Close GenZ-POS on <strong>every</strong> computer.</li>
+                <li>On the computer with SQL Server, open the GenZ-POS folder (usually <code>C:\GenZ-POS</code>),
+                    right-click <code>restore.cmd</code> → <em>Run as administrator</em>.</li>
+                <li>Drag the <code>.bak</code> file into the black window, press Enter, then type <code>YES</code>.</li>
+                <li>Start GenZ-POS again. Anything entered after that backup was made is gone.</li>
+            </ol>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private const string labelStyle = "width:150px; padding:4px 8px 4px 0; opacity:0.7; vertical-align:top";
+
+    private ShopForm form = new();
+
+    private sealed record PrintFormatOption(PrintFormat Value, string Text);
+    private static readonly PrintFormatOption[] printFormats =
+    [
+        new(PrintFormat.Receipt80, "Receipt printer, 80 mm roll"),
+        new(PrintFormat.Receipt58, "Receipt printer, 58 mm roll"),
+        new(PrintFormat.A4, "A4 / A5 page (normal printer)"),
+    ];
+    private IReadOnlyList<BackupFile> backups = [];
+    private bool savingShop;
+    private bool savingLogo;
+
+    /// <summary>Pick an image, resize it for receipts (LogoImage) and save it straight away.</summary>
+    private async Task ChooseLogoAsync()
+    {
+        var path = await Desktop.PickOpenFileAsync(LogoImage.FileFilter);
+        if (path is null) return;
+        savingLogo = true;
+        await RunAsync(async () =>
+        {
+            using var file = await Desktop.ReadFileAsync(path);
+            var png = await Task.Run(() => LogoImage.Prepare(file));
+            await Shop.SaveLogoAsync(png);
+        }, "Logo saved — it prints at the top of receipts and invoices");
+        savingLogo = false;
+    }
+
+    private async Task RemoveLogoAsync()
+    {
+        if (!await ConfirmAsync("Remove the shop logo from receipts and invoices?")) return;
+        await RunAsync(() => Shop.SaveLogoAsync(null), "Logo removed");
+    }
+    private bool backingUp;
+
+    private bool BackupIsOld => Backup.LastBackupAt is not { } at || at < DateTime.Now.AddDays(-2);
+
+    protected override void OnInitialized()
+    {
+        form = new ShopForm { Name = Shop.Name, Phone = Shop.Phone, Address = Shop.Address, Footer = Shop.InvoiceFooter, PrintFormat = Shop.PrintFormat, ShowNameWithLogo = Shop.ShowNameWithLogo };
+        Backup.Changed += OnBackupChanged;
+        RefreshBackups();
+    }
+
+    private async Task SaveShopAsync()
+    {
+        savingShop = true;
+        await RunAsync(() => Shop.SaveAsync(form.Name, form.Phone, form.Address, form.Footer, form.PrintFormat, form.ShowNameWithLogo), "Shop details saved");
+        savingShop = false;
+    }
+
+    private async Task BackupNowAsync()
+    {
+        backingUp = true;
+        BackupFile? made = null;
+        await RunAsync(async () => made = await Backup.BackupAsync());
+        backingUp = false;
+        RefreshBackups();
+        if (made is not null)
+            Toast(NotificationSeverity.Success, $"Backup saved: {made.Name}", 5000);
+    }
+
+    private async Task CopyAsync(BackupFile? file)
+    {
+        if (file is null)
+        {
+            Toast(NotificationSeverity.Warning, "There is no backup yet. Press Backup now first.");
+            return;
+        }
+        await RunAsync(async () =>
+        {
+            var dest = await Desktop.CopyFileAsync(file.FullPath, "Backup files (*.bak)|*.bak");
+            if (dest is not null)
+                Toast(NotificationSeverity.Success, $"Copied to {dest}", 5000);
+        });
+    }
+
+    private Task Open(string folder) => RunAsync(() =>
+    {
+        Desktop.OpenFolder(folder);
+        return Task.CompletedTask;
+    });
+
+    private void RefreshBackups() => backups = Backup.IsLocalServer ? Backup.ListBackups(Config.KeepBackups + 5) : [];
+
+    // BackupService is a singleton; the daily auto-backup may finish while this page is open (any thread).
+    private void OnBackupChanged() => _ = InvokeAsync(() =>
+    {
+        RefreshBackups();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Backup.Changed -= OnBackupChanged;
+
+    private sealed class ShopForm
+    {
+        public string Name { get; set; } = "";
+        public string? Phone { get; set; }
+        public string? Address { get; set; }
+        public string? Footer { get; set; }
+        public PrintFormat PrintFormat { get; set; }
+        public bool ShowNameWithLogo { get; set; }
+    }
+}

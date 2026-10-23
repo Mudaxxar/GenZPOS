@@ -1,0 +1,16 @@
+/* "+" sizes / colours panel under the Item row. */
+.article-panel {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--rz-primary-light);
+    border-left: 4px solid var(--rz-primary);
+    border-radius: 6px;
+    background: var(--rz-base-50);
+}
+
+/* Article no. on the Item row: automatic and read-only, so it looks like a value, not an input. */
+::deep .readonly-field input {
+    background: var(--rz-base-100);
+    cursor: default;
+    font-weight: 600;
+}

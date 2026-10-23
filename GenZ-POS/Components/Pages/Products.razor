@@ -1,0 +1,246 @@
+@page "/products"
+@attribute [Authorize(Policy = Permissions.CatalogManage)]
+@inherits PageBase
+@inject ProductExcelService Excel
+@inject DesktopService Desktop
+@inject StockItemService Variants
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Products</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+        <RadzenButton Text="Import from Excel" Icon="upload_file" ButtonStyle="ButtonStyle.Light" Click="ImportAsync" />
+        <RadzenSplitButton Text="Export to Excel" Icon="download" ButtonStyle="ButtonStyle.Light" Click="@(item => ExportAsync(item?.Value as string == "template"))">
+            <ChildContent>
+                <RadzenSplitButtonItem Text="Empty template (for new products)" Value="template" Icon="post_add" />
+            </ChildContent>
+        </RadzenSplitButton>
+        <RadzenButton Text="Add product" Icon="add" Click="@(() => OpenAsync(0))" />
+    </RadzenStack>
+</RadzenStack>
+
+<RadzenCard>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <RadzenTextBox Placeholder="Search name, colour, brand, article no. or barcode…" @bind-Value="search" @bind-Value:after="ReloadAsync" Style="min-width:280px; flex:1" />
+        <RadzenDropDown TValue="int?" @bind-Value="companyId" @bind-Value:after="ReloadAsync" Data="@companies" TextProperty="Name" ValueProperty="Id"
+                        Placeholder="All companies" AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Style="width:200px" />
+        <RadzenDropDown TValue="int?" @bind-Value="categoryId" @bind-Value:after="ReloadAsync" Data="@categories" TextProperty="Name" ValueProperty="Id"
+                        Placeholder="All categories" AllowClear="true" Style="width:200px" />
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+            <RadzenCheckBox Name="ShowInactive" @bind-Value="showInactive" @bind-Value:after="ReloadAsync" />
+            <RadzenLabel Text="Show inactive" Component="ShowInactive" />
+        </RadzenStack>
+    </RadzenStack>
+
+    <RadzenDataGrid @ref="grid" TItem="ProductRow" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                    AllowPaging="true" PageSize="20" ShowPagingSummary="true" Density="Density.Compact" EmptyText="No products found."
+                    RowDoubleClick="@(a => OpenAsync(a.Data!.Id))">
+        <Columns>
+            <RadzenDataGridColumn Property="Company" Title="Company" Width="140px" />
+            <RadzenDataGridColumn Title="Category" Width="190px"><Template>@context.Category › @context.SubCategory</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="Name" Title="Product">
+                <Template>@context.Name@if (context.Articles.Length > 0) { <span style="opacity:0.6; font-size:0.85em"> · Art @context.Articles</span> }</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Pack" Width="90px"><Template>@context.PackSize</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Sizes & colours" Width="170px">
+                <Template><span title="@context.VariantsText">@context.VariantsSummary</span></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Cost" Width="125px" TextAlign="TextAlign.Right"><Template>@Range(context.MinCost, context.MaxCost)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Price" Width="125px" TextAlign="TextAlign.Right"><Template>@Range(context.MinPrice, context.MaxPrice)</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Max off" Width="80px" TextAlign="TextAlign.Right"><Template>@(context.MaxDiscountPercent is { } m ? $"{m:0.##}%" : "")</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Stock" Width="100px" TextAlign="TextAlign.Right"><Template>@Qty(context.OnHand) @context.Unit</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Status" Width="115px" TextAlign="TextAlign.Center">
+                <Template>
+                    @if (context.OutCount > 0 && context.OutCount == context.VariantCount)
+                    {
+                        <RadzenBadge BadgeStyle="BadgeStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" Text="Out of stock" />
+                    }
+                    else if (context.OutCount > 0 || context.LowCount > 0)
+                    {
+                        <RadzenBadge BadgeStyle="BadgeStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" Text="Low"
+                                     title="@($"{context.OutCount} size / colour(s) out of stock, {context.LowCount} at or below their reorder level")" />
+                    }
+                    else
+                    {
+                        <RadzenBadge BadgeStyle="BadgeStyle.Success" Variant="Variant.Flat" Shade="Shade.Lighter" Text="OK" />
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Width="150px" TextAlign="TextAlign.Right">
+                <Template>
+                    @if (!context.IsActive) { <RadzenBadge BadgeStyle="BadgeStyle.Light" Text="Inactive" class="rz-me-1" /> }
+                    <RadzenButton Icon="history" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Item history (stock card)"
+                                  Click="@(() => Nav.NavigateTo($"stock/{context.FirstStockItemId}/history"))" />
+                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Edit" Click="@(() => OpenAsync(context.Id))" />
+                    <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private RadzenDataGrid<ProductRow> grid = default!;
+    private List<ProductRow>? rows; // null until first load → Radzen calls LoadData right after first render
+    private int count, loadVersion;
+    private bool loading = true;
+
+    private string? search;
+    private int? companyId, categoryId;
+    private bool showInactive;
+    private List<Company> companies = [];
+    private List<Category> categories = [];
+
+    private record ProductRow(int Id, string Company, string Category, string SubCategory, string Name,
+        string? PackSize, string Unit, decimal? MaxDiscountPercent, bool IsActive)
+    {
+        public int FirstStockItemId { get; set; }
+        /// <summary>"ART000001, ART000004": its stock items' article nos.</summary>
+        public string Articles { get; set; } = "";
+        public int VariantCount { get; set; }
+        public string VariantsSummary { get; set; } = "";
+        public string VariantsText { get; set; } = "";
+        public decimal MinCost { get; set; }
+        public decimal MaxCost { get; set; }
+        public decimal MinPrice { get; set; }
+        public decimal MaxPrice { get; set; }
+        public decimal OnHand { get; set; }
+        // Per size / colour, same rules as the stock report (StockReportRow).
+        public int OutCount { get; set; }
+        public int LowCount { get; set; }
+    }
+
+    private string Range(decimal min, decimal max) => min == max ? Money(min) : $"{Money(min)} – {Money(max)}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            companies = await db.Companies.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+            categories = await db.Categories.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion; // ignore results of an older, slower load
+        loading = true;
+        try
+        {
+            await LoadPageAsync(args, version);
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private async Task LoadPageAsync(LoadDataArgs args, int version)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var q = db.Products.AsNoTracking();
+        if (!showInactive) q = q.Where(p => p.IsActive);
+        if (companyId is not null) q = q.Where(p => p.CompanyId == companyId);
+        if (categoryId is not null) q = q.Where(p => p.SubCategory!.CategoryId == categoryId);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            q = q.Where(p => p.Name.Contains(s) || p.Company!.Name.Contains(s) ||
+                             p.StockItems.Any(v => v.Barcode == s || v.ArticleNo.Contains(s) || (v.Colour != null && v.Colour.Contains(s))));
+        }
+
+        var total = await q.CountAsync();
+        var page = await q.OrderBy(p => p.Company!.Name).ThenBy(p => p.Name).ThenBy(p => p.PackSize).ThenBy(p => p.Id)
+            .Skip(args.Skip ?? 0).Take(args.Top ?? 20)
+            .Select(p => new ProductRow(p.Id, p.Company!.Name, p.SubCategory!.Category!.Name, p.SubCategory.Name, p.Name,
+                p.PackSize, p.Unit, p.MaxDiscountPercent, p.IsActive))
+            .ToListAsync();
+
+        // Sizes / colours of the page's products, with stock.
+        var ids = page.Select(r => r.Id).ToList();
+        var variants = await db.StockItems.AsNoTracking().Where(v => ids.Contains(v.ProductId)).OrderBy(v => v.Id).ToListAsync();
+        var onHand = await StockService.GetOnHandAsync(db, variants.Select(v => v.Id));
+        foreach (var r in page)
+        {
+            var mine = variants.Where(v => v.ProductId == r.Id).ToList();
+            if (mine.Count == 0) continue;
+            var colours = mine.Select(v => v.Colour).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var sizes = StockItemService.SortSizes(mine.Select(v => v.Size));
+            r.FirstStockItemId = mine[0].Id;
+            r.Articles = string.Join(", ", mine.Select(v => v.ArticleNo).Distinct(StringComparer.OrdinalIgnoreCase));
+            r.VariantCount = mine.Count;
+            r.VariantsSummary = mine.Count == 1
+                ? mine[0].VariantName
+                : string.Join(" · ", new[]
+                  {
+                      colours.Count == 1 ? colours[0] : colours.Count > 1 ? $"{colours.Count} colours" : null,
+                      sizes.Count == 1 ? sizes[0] : sizes.Count > 1 ? $"sizes {sizes[0]}–{sizes[^1]}" : null,
+                  }.Where(s => s is not null));
+            r.VariantsText = string.Join(" · ", new[] { string.Join(", ", colours), string.Join(", ", sizes) }.Where(s => s.Length > 0));
+            r.MinCost = mine.Min(v => v.PurchasePrice);
+            r.MaxCost = mine.Max(v => v.PurchasePrice);
+            r.MinPrice = mine.Min(v => v.SalePrice);
+            r.MaxPrice = mine.Max(v => v.SalePrice);
+            r.OnHand = mine.Sum(v => onHand.GetValueOrDefault(v.Id));
+            r.OutCount = mine.Count(v => onHand.GetValueOrDefault(v.Id) <= 0);
+            r.LowCount = mine.Count(v => v.ReorderLevel > 0 && onHand.GetValueOrDefault(v.Id) is var qty && qty > 0 && qty <= v.ReorderLevel);
+        }
+
+        if (version != loadVersion) return;
+        count = total;
+        rows = page;
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task OpenAsync(int id)
+    {
+        await Dialogs.OpenAsync<ProductDialog>(id == 0 ? "Add product" : "Edit product",
+            new Dictionary<string, object?> { [nameof(ProductDialog.ProductId)] = id },
+            new DialogOptions { Width = "760px" });
+        // Always refresh: "Save & add another" may have saved items even if the dialog was then closed with X.
+        await grid.Reload();
+    }
+
+    /// <summary>All products (or just the column titles) to an .xlsx the user picks; offers to open it.</summary>
+    private async Task ExportAsync(bool template)
+    {
+        var name = template ? "Products template.xlsx" : $"Products {DateTime.Today:yyyy-MM-dd}.xlsx";
+        var path = await Desktop.PickSaveFileAsync(name, ProductExcelService.FileFilter);
+        if (path is null) return;
+        if (await RunAsync(async () =>
+            {
+                using var ms = new System.IO.MemoryStream();
+                await Excel.ExportAsync(ms, template);
+                await Desktop.WriteFileAsync(path, ms.ToArray());
+            }) && await ConfirmAsync($"Saved {System.IO.Path.GetFileName(path)}. Open it in Excel now?"))
+            await RunAsync(() => { Desktop.OpenFile(path); return Task.CompletedTask; });
+    }
+
+    private async Task ImportAsync()
+    {
+        var path = await Desktop.PickOpenFileAsync(ProductExcelService.FileFilter);
+        if (path is null) return;
+        if (await Dialogs.OpenAsync<ProductImportDialog>("Import products from Excel",
+                new Dictionary<string, object?> { [nameof(ProductImportDialog.FilePath)] = path },
+                new DialogOptions { Width = "960px" }) == true)
+            await grid.Reload();
+    }
+
+    private async Task DeleteAsync(ProductRow p)
+    {
+        if (!await ConfirmAsync($"Delete \"{p.Name}\" with all its sizes / colours? Products with stock history can't be deleted; mark them inactive instead.")) return;
+        if (await RunAsync(() => Variants.DeleteProductAsync(p.Id), "Deleted"))
+            await grid.Reload();
+    }
+}
