@@ -24,23 +24,63 @@ public static class Code128
         "114131", "311141", "411131", "211412", "211214", "211232", "2331112",
     ];
 
-    private const int StartB = 104, Stop = 106;
+    private const int StartB = 104, StartC = 105, CodeB = 100, CodeC = 99, Stop = 106;
 
-    /// <summary>The symbol values: Start B, one per character, check symbol, Stop.</summary>
+    /// <summary>
+    /// The symbol values: start, data, check symbol, Stop. Like BarTender, runs of digits use set C (two digits per
+    /// symbol) — "SH000023" = B: S H, then C: 00 00 23 — so the barcode needs fewer, wider bars and fits small labels
+    /// (owner 2026-10-24: 50 × 35 mm on a 203-dpi printer). Set C is used for a whole even run of ≥ 2 digits, a run of
+    /// ≥ 4 digits at the start or end, and ≥ 6 in the middle (an odd run keeps its first digit in B).
+    /// </summary>
     public static IReadOnlyList<int> Symbols(string text)
     {
         if (string.IsNullOrEmpty(text))
             throw new ArgumentException("Nothing to encode.", nameof(text));
-        var codes = new List<int>(text.Length + 3) { StartB };
         foreach (var c in text)
-        {
             if (c < 32 || c > 126)
                 throw new ArgumentException($"Code 128 B can't encode '{c}'.", nameof(text));
-            codes.Add(c - 32);
+
+        int DigitRun(int from)
+        {
+            var n = 0;
+            while (from + n < text.Length && char.IsAsciiDigit(text[from + n])) n++;
+            return n;
         }
-        var sum = StartB;
-        for (var i = 1; i < codes.Count; i++)
-            sum += codes[i] * i;
+
+        var codes = new List<int>(text.Length + 4);
+        var i = 0;
+        var first = DigitRun(0);
+        var inC = (first == text.Length && first >= 2 && first % 2 == 0) || first >= 4;
+        codes.Add(inC ? StartC : StartB);
+        if (inC && first % 2 == 1) { codes[0] = StartB; inC = false; } // odd run at the start: first digit in B
+        while (i < text.Length)
+        {
+            if (inC)
+            {
+                if (DigitRun(i) >= 2)
+                {
+                    codes.Add((text[i] - '0') * 10 + (text[i + 1] - '0'));
+                    i += 2;
+                    continue;
+                }
+                codes.Add(CodeB);
+                inC = false;
+            }
+            var run = DigitRun(i);
+            var atEnd = i + run == text.Length;
+            if (run % 2 == 0 && (run >= 6 || (run >= 4 && atEnd)))
+            {
+                codes.Add(CodeC);
+                inC = true;
+                continue;
+            }
+            codes.Add(text[i] - 32);
+            i++;
+        }
+
+        var sum = codes[0];
+        for (var p = 1; p < codes.Count; p++)
+            sum += codes[p] * p;
         codes.Add(sum % 103);
         codes.Add(Stop);
         return codes;

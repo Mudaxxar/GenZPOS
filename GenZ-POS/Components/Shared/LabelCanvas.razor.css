@@ -62,3 +62,14 @@
     border: 2px solid #fff;
     cursor: nwse-resize;
 }
+
+/* Sideways text: centred in its element, turned by the element's rotation. */
+.lc-turn {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    pointer-events: none;
+}

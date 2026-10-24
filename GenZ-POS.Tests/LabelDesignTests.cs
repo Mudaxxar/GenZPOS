@@ -41,3 +41,37 @@ public class LabelDesignTests
             }
     }
 }
+
+public class SmallLabelTests
+{
+    [Fact]
+    public void Owner_small_label_fits_and_reads_like_bartender()
+    {
+        var design = LabelDesign.SmallLabel();
+        // BarTender: page 38 × 25, template 35.5 × 25 → 1.25 mm blank left and right.
+        Assert.Equal((35.5, 25.0, 38.0, 25.0), (design.WidthMm, design.HeightMm, design.PaperWidthMm, design.PaperHeightMm));
+        Assert.Equal((1.25, 0.0), (design.OffsetXMm, design.OffsetYMm));
+        foreach (var e in design.Elements)
+        {
+            Assert.InRange(e.X, 0, 35.5);
+            Assert.InRange(e.X + e.W, 0, 35.51);
+            Assert.InRange(e.Y + e.H, 0, 25.01);
+        }
+        // Side texts run up the sides; the round trip keeps direction and narrow font.
+        var back = LabelDesign.FromJson(design.ToJson())!;
+        Assert.Equal(38.0, back.PageWidthMm);
+        // Room for 2-dot bars on a 203-dpi printer (1-dot bars scan badly), clear of the side texts.
+        var bar = back.Elements.Single(e => e.Field == LabelField.Barcode);
+        Assert.True(bar.W / 25.4 * 203 >= Code128.ModuleCount("SH000023") * 2);
+        Assert.All(back.Elements.Where(e => e.Rotation == 270), side => Assert.True(side.X + side.W <= bar.X || side.X >= bar.X + bar.W));
+        Assert.Equal(2, back.Elements.Count(e => e.Rotation == 270));
+        Assert.Equal("Arial Narrow", back.Elements.Single(e => e.Field == LabelField.Price).Font);
+
+        // "Rs:9,999" (prefix + number only), "Size: 41", "Clr: Orange".
+        var label = new LabelData("12345678", "ART000001", "Shoes", "Orange", "41", 9999);
+        string Text(LabelField f) => LabelDesign.TextFor(back.Elements.Single(e => e.Field == f), label, null!)!;
+        Assert.Equal("Rs:9,999", Text(LabelField.Price));
+        Assert.Equal("Size: 41", Text(LabelField.Size));
+        Assert.Equal("Clr: Orange", Text(LabelField.Colour));
+    }
+}

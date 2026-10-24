@@ -10,8 +10,9 @@
     @foreach (var e in Design.Elements)
     {
         var selected = Interactive && e.Id == SelectedId;
+        var boxStyle = $"left:{Px(e.X)}px; top:{Px(e.Y)}px; width:{Px(e.W)}px; height:{Px(Math.Max(e.H, e.Field == LabelField.Line ? 0.3 : 0))}px; justify-content:{Justify(e.Align)}{Overflow(e)}";
         <div class="lc-el @(selected ? "selected" : null) lc-@e.Field.ToString().ToLowerInvariant()"
-             style="left:@Px(e.X)px; top:@Px(e.Y)px; width:@Px(e.W)px; height:@Px(Math.Max(e.H, e.Field == LabelField.Line ? 0.3 : 0))px; justify-content:@Justify(e.Align)"
+             style="@boxStyle"
              @onpointerdown="@(args => Down(e, false, args))" title="@(Interactive ? LabelDesign.FieldName(e.Field) : null)">
             @switch (e.Field)
             {
@@ -37,7 +38,19 @@
                     break;
                 default:
                     var text = LabelDesign.TextFor(e, Label, Shop);
-                    <span style="font-size:@FontPx(e, text)px; font-weight:@(e.Bold ? 700 : 400)">@(text ?? (Interactive ? $"[{LabelDesign.FieldName(e.Field)}]" : ""))</span>
+                    var textStyle = $"font-size:{FontPx(e, text)}px; font-weight:{(e.Bold ? 700 : 400)}" +
+                                    $"; font-family:'{e.Font}', Arial, sans-serif" + (e.ShrinkToFit ? "" : "; overflow:visible");
+                    if (e.IsSideways)
+                    {
+                        @* Sideways text: a box of the element's height × width, turned around the centre (like the printer). *@
+                        <div class="lc-turn" style="width:@Px(e.H)px; height:@Px(e.W)px; justify-content:@Justify(e.Align); transform:translate(-50%, -50%) rotate(@(e.Rotation)deg)">
+                            <span style="@textStyle">@(text ?? (Interactive ? $"[{LabelDesign.FieldName(e.Field)}]" : ""))</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <span style="@textStyle">@(text ?? (Interactive ? $"[{LabelDesign.FieldName(e.Field)}]" : ""))</span>
+                    }
                     break;
             }
             @if (selected)
@@ -60,15 +73,20 @@
 
     private string Px(double mm) => (mm * PxPerMm).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
+    /// <summary>An exact-size text may run past its box (like the printer); shrinking ones stay inside.</summary>
+    private static string Overflow(LabelElement e) => e.ShrinkToFit ? "" : "; overflow:visible";
+
     private static string Justify(LabelAlign a) => a switch { LabelAlign.Left => "flex-start", LabelAlign.Right => "flex-end", _ => "center" };
 
     /// <summary>Points → pixels at this scale, shrunk (estimate for Arial) so one line fits the box like the printer does.</summary>
     private string FontPx(LabelElement e, string? text)
     {
         var px = e.FontPt * 0.3528 * PxPerMm;                 // 1 pt = 0.3528 mm
-        px = Math.Min(px, e.H * PxPerMm * 0.86);
+        if (!e.ShrinkToFit) return px.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture); // exact size
+        var (along, across) = e.IsSideways ? (e.H, e.W) : (e.W, e.H); // sideways text runs along the height
+        px = Math.Min(px, across * PxPerMm * 0.86);
         var chars = Math.Max(1, (text ?? LabelDesign.FieldName(e.Field)).Length);
-        px = Math.Min(px, e.W * PxPerMm / (chars * (e.Bold ? 0.6 : 0.55)));
+        px = Math.Min(px, along * PxPerMm / (chars * (e.Bold ? 0.6 : 0.55) * (e.Font.Contains("Narrow", StringComparison.OrdinalIgnoreCase) || e.Font.Contains("Condensed", StringComparison.OrdinalIgnoreCase) ? 0.82 : 1)));
         return Math.Max(4, px).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
     }
 

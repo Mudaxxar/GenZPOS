@@ -12,6 +12,9 @@
 <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
     <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Barcode label design</RadzenText>
     <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center">
+        @* Ready-made layouts (owner's BarTender 50 × 35 label, the tall hang tag): replace the design, then Save. *@
+        <RadzenDropDown TValue="int?" Data="@presetOptions" TextProperty="Text" ValueProperty="Value" Placeholder="Start from a layout…"
+                        @bind-Value="presetIndex" @bind-Value:after="UsePresetAsync" Style="width:270px" />
         <RadzenButton Text="Reset to default layout" Icon="restart_alt" ButtonStyle="ButtonStyle.Light" Click="ResetAsync" />
         <RadzenButton Text="Undo changes" Icon="undo" ButtonStyle="ButtonStyle.Light" Disabled="@(!dirty)" Click="Reload" />
         <RadzenButton Text="Save design" Icon="save" IsBusy="@saving" Disabled="@(!dirty)" Click="SaveAsync" />
@@ -23,11 +26,18 @@
     <RadzenColumn Size="12" SizeLG="7">
         <RadzenCard>
             <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.75rem" Wrap="FlexWrap.Wrap" class="rz-mb-3">
-                <RadzenFormField Text="Label width (mm)" Style="width:140px">
-                    <RadzenNumeric TValue="double" Value="@design.WidthMm" ValueChanged="@(v => Resize(v, design.HeightMm))" Min="10" Max="300" Step="1" Format="0.#" />
+                <RadzenFormField Text="Label / template width (mm)" Style="width:140px">
+                    <RadzenNumeric TValue="double" Value="@design.WidthMm" ValueChanged="@(v => Resize(v, design.HeightMm))" Min="10" Max="300" Step="0.5" Format="0.#" />
                 </RadzenFormField>
-                <RadzenFormField Text="Label height (mm)" Style="width:140px">
-                    <RadzenNumeric TValue="double" Value="@design.HeightMm" ValueChanged="@(v => Resize(design.WidthMm, v))" Min="10" Max="600" Step="1" Format="0.#" />
+                <RadzenFormField Text="Label / template height (mm)" Style="width:140px">
+                    <RadzenNumeric TValue="double" Value="@design.HeightMm" ValueChanged="@(v => Resize(design.WidthMm, v))" Min="10" Max="600" Step="0.5" Format="0.#" />
+                </RadzenFormField>
+                @* BarTender "page size": the paper the printer feeds, when bigger than the label (template); the label is centred. *@
+                <RadzenFormField Text="Page width (mm)" Style="width:130px" title="Paper the printer feeds (BarTender page size); empty = the label width">
+                    <RadzenNumeric TValue="double?" @bind-Value="design.PageWidthMm" @bind-Value:after="Changed" Min="10" Max="300" Step="0.5" Format="0.#" Placeholder="= label" />
+                </RadzenFormField>
+                <RadzenFormField Text="Page height (mm)" Style="width:130px" title="Empty = the label height">
+                    <RadzenNumeric TValue="double?" @bind-Value="design.PageHeightMm" @bind-Value:after="Changed" Min="10" Max="600" Step="0.5" Format="0.#" Placeholder="= label" />
                 </RadzenFormField>
                 <RadzenFormField Text="Add" Style="width:190px">
                     <RadzenDropDown TValue="LabelField?" Data="@fields" TextProperty="Text" ValueProperty="Value" Placeholder="Add an item…"
@@ -65,7 +75,7 @@
                     <RadzenColumn Size="6"><RadzenFormField Text="@(e.Field == LabelField.Line ? "Thickness (mm)" : "Height (mm)")" Style="width:100%"><RadzenNumeric TValue="double" @bind-Value="e.H" @bind-Value:after="Changed" Min="0.2m" Step="0.5" Format="0.#" /></RadzenFormField></RadzenColumn>
                     @if (IsText(e.Field))
                     {
-                        <RadzenColumn Size="6"><RadzenFormField Text="Font size (pt, max)" Style="width:100%"><RadzenNumeric TValue="double" @bind-Value="e.FontPt" @bind-Value:after="Changed" Min="4" Max="200" Step="1" Format="0.#" /></RadzenFormField></RadzenColumn>
+                        <RadzenColumn Size="6"><RadzenFormField Text="@(e.ShrinkToFit ? "Font size (pt, max)" : "Font size (pt)")" Style="width:100%"><RadzenNumeric TValue="double" Value="@e.FontPt" ValueChanged="@((double v) => { e.FontPt = v; e.ShrinkToFit = false; Changed(); })" Min="4" Max="200" Step="0.5" Format="0.#" title="Typing a size makes it exact (no shrinking)" /></RadzenFormField></RadzenColumn>
                         <RadzenColumn Size="6">
                             <RadzenFormField Text="Align" Style="width:100%">
                                 <RadzenDropDown TValue="LabelAlign" Data="@(Enum.GetValues<LabelAlign>())" @bind-Value="e.Align" @bind-Value:after="Changed" />
@@ -76,10 +86,30 @@
                                 <RadzenTextBox @bind-Value="e.Text" @bind-Value:after="Changed" MaxLength="60" Immediate="true" />
                             </RadzenFormField>
                         </RadzenColumn>
-                        <RadzenColumn Size="12">
-                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenColumn Size="12" SizeSM="6">
+                            <RadzenFormField Text="Direction" Style="width:100%">
+                                <RadzenDropDown TValue="int" Data="@rotations" TextProperty="Text" ValueProperty="Value" @bind-Value="e.Rotation" @bind-Value:after="Changed" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12" SizeSM="6">
+                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap" Style="height:100%">
                                 <RadzenSwitch @bind-Value="e.Bold" @bind-Value:after="Changed" Name="Bold" />
                                 <RadzenLabel Text="Bold" Component="Bold" />
+                            </RadzenStack>
+                        </RadzenColumn>
+                        @* Owner 2026-10-24: every text can have its own font (installed on this PC), size and bold. *@
+                        <RadzenColumn Size="12">
+                            <RadzenFormField Text="Font" Style="width:100%">
+                                <RadzenDropDown TValue="string" Data="@fonts" Value="@e.Font" ValueChanged="@((string f) => { e.FontName = f; e.Narrow = false; Changed(); })"
+                                                AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive">
+                                    <Template Context="f"><span style="font-family:'@f', Arial; font-size:1.05rem">@f</span></Template>
+                                </RadzenDropDown>
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12">
+                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+                                <RadzenSwitch @bind-Value="e.ShrinkToFit" @bind-Value:after="Changed" Name="Shrink" />
+                                <RadzenLabel Text="@(e.ShrinkToFit ? "Shrink to fit the box (font size = largest)" : "Exact font size (may run past the box: make the box bigger)")" Component="Shrink" />
                             </RadzenStack>
                         </RadzenColumn>
                     }
@@ -114,10 +144,12 @@
     private bool dirty, saving, printing, keyHandled;
     private readonly LabelData sample = LabelDesign.Sample;
     private IReadOnlyList<string> printers = [];
+    /// <summary>Fonts installed on this PC (the label printer prints with them).</summary>
+    private readonly IReadOnlyList<string> fonts = LabelPrinter.InstalledFonts();
     private string? printer;
 
     /// <summary>Screen pixels per mm: the whole label fits about 560 × 430 px.</summary>
-    private double Scale => Math.Clamp(Math.Min(560 / design.HeightMm, 430 / design.WidthMm), 1.2, 8);
+    private double Scale => Math.Clamp(Math.Min(560 / design.HeightMm, 430 / design.WidthMm), 1.2, 12);
 
     protected override void OnInitialized()
     {
@@ -234,16 +266,31 @@
     private void Resize(double widthMm, double heightMm)
     {
         if (widthMm < 10 || heightMm < 10) return;
-        double sx = widthMm / design.WidthMm, sy = heightMm / design.HeightMm, fs = Math.Min(sx, sy);
-        foreach (var e in design.Elements)
-        {
-            e.X = Snap(e.X * sx); e.W = Math.Max(1, Snap(e.W * sx));
-            e.Y = Snap(e.Y * sy);
-            if (e.Field != LabelField.Line) e.H = Math.Max(1, Snap(e.H * sy));
-            e.FontPt = Math.Round(e.FontPt * fs, 1);
-        }
-        design.WidthMm = widthMm;
-        design.HeightMm = heightMm;
+        design.ScaleTo(widthMm, heightMm, Snap);
+        dirty = true;
+    }
+
+    private sealed record IntOption(int Value, string Text);
+
+    /// <summary>Text direction: across, or sideways like BarTender's side texts (the box stays where it is).</summary>
+    private static readonly IntOption[] rotations =
+    [
+        new(0, "Across →"),
+        new(270, "Up the side ↑ (bottom to top)"),
+        new(90, "Down the side ↓ (top to bottom)"),
+    ];
+
+    private static readonly IntOption[] presetOptions = LabelDesign.Presets.Select((p, i) => new IntOption(i, p.Name)).ToArray();
+    private int? presetIndex;
+
+    private async Task UsePresetAsync()
+    {
+        if (presetIndex is not int i) return;
+        var (name, make) = LabelDesign.Presets[i];
+        presetIndex = null;
+        if (!await ConfirmAsync($"Replace this design with \"{name}\"? (Press Save design to keep it.)")) return;
+        design = make();
+        selected = null;
         dirty = true;
     }
 

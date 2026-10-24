@@ -39,8 +39,8 @@ public static class LabelPrinter
             if (!doc.PrinterSettings.IsValid)
                 return $"Printer \"{doc.PrinterSettings.PrinterName}\" was not found. Choose the label printer again.";
 
-            doc.DefaultPageSettings.PaperSize = new PaperSize($"GenZ label {design.WidthMm:0.#}x{design.HeightMm:0.#} mm",
-                (int)Math.Round(Units(design.WidthMm)), (int)Math.Round(Units(design.HeightMm)));
+            doc.DefaultPageSettings.PaperSize = new PaperSize($"GenZ label {design.PaperWidthMm:0.#}x{design.PaperHeightMm:0.#} mm",
+                (int)Math.Round(Units(design.PaperWidthMm)), (int)Math.Round(Units(design.PaperHeightMm))); // the page (e.g. 38 × 25), not the label
             doc.DefaultPageSettings.Landscape = false;
             doc.DefaultPageSettings.Margins = new Margins(0, 0, 0, 0);
             doc.OriginAtMargins = false;
@@ -74,6 +74,8 @@ public static class LabelPrinter
     {
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
         g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        // The label (template) is centred on a bigger page: 38 × 25 page, 35.5 × 25 label → 1.25 mm blank each side.
+        g.TranslateTransform(Units(design.OffsetXMm), Units(design.OffsetYMm));
 
         foreach (var e in design.Elements)
         {
@@ -97,6 +99,13 @@ public static class LabelPrinter
         }
     }
 
+    /// <summary>Condensed font for <see cref="LabelElement.Narrow"/>: Arial Narrow when installed (it comes with Office), else Arial.</summary>
+    /// <summary>Fonts installed on this PC; a design's font that isn't here prints in Arial.</summary>
+    private static readonly HashSet<string> Installed = FontFamily.Families.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Installed font names for the designer's Font list.</summary>
+    public static IReadOnlyList<string> InstalledFonts() => Installed.Order(StringComparer.OrdinalIgnoreCase).ToList();
+
     /// <summary>One line of text in its box, aligned, vertically centred; shrinks until it fits the box both ways.</summary>
     private static void DrawText(Graphics g, string text, LabelElement e, RectangleF box)
     {
@@ -104,25 +113,37 @@ public static class LabelPrinter
         {
             Alignment = e.Align switch { LabelAlign.Left => StringAlignment.Near, LabelAlign.Right => StringAlignment.Far, _ => StringAlignment.Center },
             LineAlignment = StringAlignment.Center,
-            FormatFlags = StringFormatFlags.NoWrap,
+            FormatFlags = StringFormatFlags.NoWrap | (e.ShrinkToFit ? 0 : StringFormatFlags.NoClip), // exact size may run past the box
+            Trimming = StringTrimming.None, // never cut letters off (an exact-size text runs past the box instead)
         };
         var style = e.Bold ? FontStyle.Bold : FontStyle.Regular;
+        var family = Installed.Contains(e.Font) ? e.Font : "Arial";
         var size = (float)Math.Max(4, e.FontPt);
-        var font = new Font("Arial", size, style);
+        var font = new Font(family, size, style);
+        // Sideways text (90 = top → bottom, 270 = bottom → top): turned around the box centre, so it runs along the
+        // box's height and must fit the box with width and height swapped.
+        var area = e.IsSideways ? new RectangleF(-box.Height / 2, -box.Width / 2, box.Height, box.Width) : box;
+        var state = g.Save();
         try
         {
-            while (size > 4)
+            while (e.ShrinkToFit && size > 4)
             {
                 var measured = g.MeasureString(text, font);
-                if (measured.Width <= box.Width && measured.Height <= box.Height * 1.15f) break;
+                if (measured.Width <= area.Width && measured.Height <= area.Height * 1.15f) break;
                 size *= 0.93f;
                 font.Dispose();
-                font = new Font("Arial", size, style);
+                font = new Font(family, size, style);
             }
-            g.DrawString(text, font, Brushes.Black, box, format);
+            if (e.IsSideways)
+            {
+                g.TranslateTransform(box.X + box.Width / 2, box.Y + box.Height / 2);
+                g.RotateTransform(e.Rotation);
+            }
+            g.DrawString(text, font, Brushes.Black, area, format);
         }
         finally
         {
+            g.Restore(state);
             font.Dispose();
         }
     }
@@ -151,7 +172,12 @@ public static class LabelPrinter
     {
         var widths = Code128.Widths(text);
         var dotsPerUnit = g.DpiX / 100f; // printer dots per 1/100 inch
-        var moduleDots = Math.Max(1, (int)Math.Floor(box.Width * dotsPerUnit / (widths.Sum() + 20)));
+        var boxDots = box.Width * dotsPerUnit;
+        var moduleDots = Math.Max(1, (int)Math.Floor(boxDots / (widths.Sum() + 20)));
+        // Small labels (50 × 35 mm on 203 dpi): wider bars scan better than a kept quiet zone inside the box — the
+        // label's own white margin around the box is the quiet zone then.
+        var tight = (int)Math.Floor(boxDots / widths.Sum());
+        if (tight > moduleDots && moduleDots < 3) moduleDots = tight;
         var module = moduleDots / dotsPerUnit;
         var x = box.X + (box.Width - widths.Sum() * module) / 2;
 

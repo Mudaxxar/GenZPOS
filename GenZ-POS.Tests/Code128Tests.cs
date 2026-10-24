@@ -29,9 +29,15 @@ public class Code128Tests
     [Fact]
     public void Encodes_start_data_check_and_stop()
     {
-        // "SH000023": S=51, H=40, 0=16 ×4, 2=18, 3=19; check = (104 + 51·1 + 40·2 + 16·(3+4+5+6) + 18·7 + 19·8) % 103 = 801 % 103 = 80
-        Assert.Equal([104, 51, 40, 16, 16, 16, 16, 18, 19, 80, 106], Code128.Symbols("SH000023"));
-        Assert.Equal(10 * 11 + 13, Code128.ModuleCount("SH000023"));   // start + 8 chars + check = 10 symbols of 11, stop 13
+        // "SH000023": Start B, S=51, H=40, Code C=99, 00, 00, 23 (digit pairs);
+        // check = (104 + 51·1 + 40·2 + 99·3 + 0·4 + 0·5 + 23·6) % 103 = 670 % 103 = 52
+        Assert.Equal([104, 51, 40, 99, 0, 0, 23, 52, 106], Code128.Symbols("SH000023"));
+        Assert.Equal(8 * 11 + 13, Code128.ModuleCount("SH000023"));    // 101 modules instead of 123 in set B only
+        // All digits, even: Start C, 12 34 56 78; check = (105 + 12 + 34·2 + 56·3 + 78·4) % 103 = 665 % 103 = 47
+        Assert.Equal([105, 12, 34, 56, 78, 47, 106], Code128.Symbols("12345678"));
+        // Odd run of digits at the end: one digit in B, the rest in C. Short runs stay in B.
+        Assert.Equal([104, 51, 40, 17, 99, 23, 45], Code128.Symbols("SH12345").Take(7));
+        Assert.Equal([104, 65, 18, 19], Code128.Symbols("a23").Take(4));
         Assert.Throws<ArgumentException>(() => Code128.Symbols("é"));
     }
 }

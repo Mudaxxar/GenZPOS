@@ -30,6 +30,23 @@ public sealed class LabelElement
     public LabelAlign Align { get; set; } = LabelAlign.Center;
     /// <summary>Text before the value, e.g. "Size " or "Art: "; for <see cref="LabelField.Text"/> the whole text.</summary>
     public string? Text { get; set; }
+    /// <summary>Text direction (owner 2026-10-24, BarTender-style side texts): 0 = across, 270 = up (bottom → top), 90 = down.</summary>
+    public int Rotation { get; set; }
+    /// <summary>Old designs: condensed font (Arial Narrow). New ones use <see cref="FontName"/>.</summary>
+    public bool Narrow { get; set; }
+    /// <summary>Font (any font installed on the PC, e.g. "Arial Narrow", "Impact"); null = Arial (Arial Narrow when <see cref="Narrow"/>).</summary>
+    public string? FontName { get; set; }
+    /// <summary>
+    /// True: the text gets smaller when it doesn't fit its box (the font size is the largest). False (owner 2026-10-24):
+    /// the font size is exact and the text may run past the box.
+    /// </summary>
+    public bool ShrinkToFit { get; set; } = true;
+
+    /// <summary>The font actually used.</summary>
+    [JsonIgnore]
+    public string Font => string.IsNullOrWhiteSpace(FontName) ? (Narrow ? "Arial Narrow" : "Arial") : FontName.Trim();
+
+    public bool IsSideways => Rotation is 90 or 270;
 
     public LabelElement Clone() => (LabelElement)MemberwiseClone();
 }
@@ -41,8 +58,38 @@ public sealed class LabelElement
 /// </summary>
 public sealed class LabelDesign
 {
+    /// <summary>The label (BarTender's "template"): everything is laid out in this box.</summary>
     public double WidthMm { get; set; } = 108;
     public double HeightMm { get; set; } = 250;
+
+    /// <summary>
+    /// The page the printer feeds when it is bigger than the label (BarTender "page size", owner 2026-10-24: page
+    /// 38 × 25 mm, template 35.5 × 25 mm); null = same as the label. The label is centred on the page.
+    /// </summary>
+    public double? PageWidthMm { get; set; }
+    public double? PageHeightMm { get; set; }
+
+    public double PaperWidthMm => Math.Max(PageWidthMm ?? WidthMm, WidthMm);
+    public double PaperHeightMm => Math.Max(PageHeightMm ?? HeightMm, HeightMm);
+    /// <summary>Blank margin left / top of the label on the page.</summary>
+    public double OffsetXMm => (PaperWidthMm - WidthMm) / 2;
+    public double OffsetYMm => (PaperHeightMm - HeightMm) / 2;
+
+    /// <summary>Scales every element to a new label size (fonts by the smaller factor); <paramref name="snap"/> rounds positions.</summary>
+    public void ScaleTo(double widthMm, double heightMm, Func<double, double>? snap = null)
+    {
+        snap ??= v => Math.Round(v, 2);
+        double sx = widthMm / WidthMm, sy = heightMm / HeightMm, fs = Math.Min(sx, sy);
+        foreach (var e in Elements)
+        {
+            e.X = snap(e.X * sx); e.W = Math.Max(1, snap(e.W * sx));
+            e.Y = snap(e.Y * sy);
+            if (e.Field != LabelField.Line) e.H = Math.Max(1, snap(e.H * sy));
+            e.FontPt = Math.Round(e.FontPt * fs, 1);
+        }
+        WidthMm = widthMm;
+        HeightMm = heightMm;
+    }
     public List<LabelElement> Elements { get; set; } = [];
 
     private static readonly JsonSerializerOptions Json = new() { Converters = { new JsonStringEnumConverter() } };
@@ -67,7 +114,8 @@ public sealed class LabelDesign
 
     public LabelDesign Clone() => new()
     {
-        WidthMm = WidthMm, HeightMm = HeightMm, Elements = Elements.Select(e => e.Clone()).ToList(),
+        WidthMm = WidthMm, HeightMm = HeightMm, PageWidthMm = PageWidthMm, PageHeightMm = PageHeightMm,
+        Elements = Elements.Select(e => e.Clone()).ToList(),
     };
 
     /// <summary>
@@ -98,6 +146,45 @@ public sealed class LabelDesign
         return new LabelDesign { WidthMm = widthMm, HeightMm = heightMm, Elements = list };
     }
 
+    /// <summary>
+    /// Owner's small BarTender label (2026-10-24): page 38 × 25 mm, template (label) 35.5 × 25 mm, landscape: article no. up the left side, shop name on top,
+    /// barcode + its number in the middle, "Rs:9,999" and "Size: 41" (bold, narrow) underneath, "Clr: Orange" up the
+    /// right side.
+    /// </summary>
+    public static LabelDesign SmallLabel()
+    {
+        // Laid out on 50 × 35 (the proportions of the owner's BarTender picture), then scaled to the real template.
+        var design = new LabelDesign
+        {
+        WidthMm = 50, HeightMm = 35,
+        Elements =
+        [
+            new() { Field = LabelField.ArticleNo, X = 2.8, Y = 4, W = 4.6, H = 23, FontPt = 13, Rotation = 270 },
+            new() { Field = LabelField.ShopName, X = 9, Y = 1.5, W = 34, H = 6, FontPt = 22 },
+            new() { Field = LabelField.Barcode, X = 8.5, Y = 9.6, W = 28, H = 6.5 },
+            new() { Field = LabelField.BarcodeText, X = 8.5, Y = 16.6, W = 28, H = 4.6, FontPt = 15 },
+            new() { Field = LabelField.Price, X = 9.5, Y = 22, W = 11.5, H = 5.2, FontPt = 15, Bold = true, FontName = "Arial Narrow", Text = "Rs:" },
+            new() { Field = LabelField.Size, X = 21.5, Y = 22, W = 12.5, H = 5.2, FontPt = 15, Bold = true, FontName = "Arial Narrow", Text = "Size: " },
+            new() { Field = LabelField.Colour, X = 44.6, Y = 4, W = 4.4, H = 22, FontPt = 13, Bold = true, Rotation = 270, Text = "Clr: " },
+        ],
+        };
+        design.ScaleTo(35.5, 25);
+        // The barcode uses all the room between the side texts: 25.6 mm = 204 dots at 203 dpi, so an SH… barcode
+        // (101 modules) prints with 2-dot bars — well readable — instead of 1-dot bars.
+        foreach (var e in design.Elements.Where(e => e.Field is LabelField.Barcode or LabelField.BarcodeText))
+            (e.X, e.W) = (5.8, 25.6);
+        design.PageWidthMm = 38;
+        design.PageHeightMm = 25;
+        return design;
+    }
+
+    /// <summary>Ready-made layouts the designer can start from.</summary>
+    public static IReadOnlyList<(string Name, Func<LabelDesign> Make)> Presets { get; } =
+    [
+        ("Small label 35.5 × 25 mm on a 38 × 25 page (BarTender)", SmallLabel),
+        ("Hang tag 108 × 250 mm", () => Default()),
+    ];
+
     /// <summary>Display name of a field (designer palette).</summary>
     public static string FieldName(LabelField f) => f switch
     {
@@ -122,7 +209,9 @@ public sealed class LabelDesign
             LabelField.Size => label.Size,
             LabelField.ColourSize => string.Join("  ·  ", new[] { label.Colour, label.Size is { Length: > 0 } s ? $"Size {s}" : null }
                 .Where(s => !string.IsNullOrWhiteSpace(s))),
-            LabelField.Price => LabelPrinter.PriceText(label.Price) + (label.PriceUnit is { Length: > 0 } u ? $" / {u}" : ""),
+            // With its own prefix ("Rs:") the price is the number only: "Rs:9,999"; without one "Rs 9,999".
+            LabelField.Price => (e.Text is { Length: > 0 } ? LabelPrinter.PriceText(label.Price)[3..] : LabelPrinter.PriceText(label.Price))
+                                + (label.PriceUnit is { Length: > 0 } u ? $" / {u}" : ""),
             LabelField.BarcodeText => label.Barcode,
             LabelField.Text => e.Text,
             _ => null,
