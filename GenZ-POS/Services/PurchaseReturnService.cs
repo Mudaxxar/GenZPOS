@@ -140,6 +140,8 @@ public class PurchaseReturnService(IDbContextFactory<AppDbContext> dbFactory, Cu
             .Where(m => m.Type == StockMovementType.PurchaseReturn && m.RefId == id)
             .ExecuteDeleteAsync();
         db.PurchaseReturns.Remove(ret);
+        Audit.Add(db, currentUser, Audit.PurchaseReturnDeleted,
+            $"Purchase return #{id} of {ret.ReturnDate:dd-MMM-yyyy} (bill #{ret.PurchaseId}): {ret.Lines.Count} line(s), total {ret.Total:N2}, cash back {ret.Received:N2}", id);
         await db.SaveChangesAsync();
         await tx.CommitAsync();
     }

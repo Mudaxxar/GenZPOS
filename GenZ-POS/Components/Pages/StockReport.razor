@@ -25,7 +25,7 @@
     </RadzenStack>
     <RadzenStack Orientation="Orientation.Horizontal" Gap="1.5rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
         <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Articles: <strong>@count</strong></RadzenText>
-        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Pieces in stock: <strong>@Qty(totalPieces)</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">In stock (pieces + qty): <strong>@Qty(totalPieces)</strong></RadzenText>
         <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Stock value: <strong>@Money(totalValue)</strong></RadzenText>
     </RadzenStack>
 
@@ -47,13 +47,13 @@
                     <span class="article-meta"> · @head.Category › @head.SubCategory</span>
                     @if (head.ArticleInStock > 0)
                     {
-                        <span class="article-stock">@Qty(head.ArticleInStock) in stock · @Money(head.ArticleValue)</span>
+                        <span class="article-stock">@(head.IsQuantity ? Fmt.QtyUnit(head.ArticleInStock, head.Unit) : Qty(head.ArticleInStock)) in stock · @Money(head.ArticleValue)</span>
                     }
                     else
                     {
                         <span class="article-stock out">none in stock</span>
                     }
-                    @if (head.ArticleSold > 0)
+                    @if (head.ArticleSold > 0 && !head.IsQuantity)
                     {
                         <span class="article-meta"> · @head.ArticleSold sold</span>
                     }
@@ -63,10 +63,19 @@
         <Columns>
             <RadzenDataGridColumn Property="ArticleNo" Title="Article no." />
             <RadzenDataGridColumn Title="Barcode" Width="160px">
-                <Template><strong>@context.Barcode</strong>@if (context.OnHand <= 0) { <span class="sold-tag">sold</span> }</Template>
+                <Template><strong>@context.Barcode</strong>@if (context.OnHand <= 0 && !context.IsQuantity) { <span class="sold-tag">sold</span> }</Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn Property="Colour" Title="Colour" Width="140px" />
             <RadzenDataGridColumn Title="Size" Width="90px"><Template><strong>@context.Size</strong></Template></RadzenDataGridColumn>
+            @* Quantity items (rice): kg on hand, red when at or below the low-stock level. Pieces: 1 each, not shown. *@
+            <RadzenDataGridColumn Title="In stock" Width="120px" TextAlign="TextAlign.Right">
+                <Template>
+                    @if (context.IsQuantity)
+                    {
+                        <strong style="@(context.IsLow ? "color:var(--rz-danger)" : null)" title="@(context.ReorderLevel > 0 ? $"Low-stock alert at {Qty(context.ReorderLevel)}" : null)">@Fmt.QtyUnit(context.OnHand, context.Unit)</strong>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Cost" Width="120px" TextAlign="TextAlign.Right"><Template>@Money(context.PurchasePrice)</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Price" Width="120px" TextAlign="TextAlign.Right"><Template>@Money(context.SalePrice)</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Value" Width="130px" TextAlign="TextAlign.Right"><Template>@Money(context.StockValue)</Template></RadzenDataGridColumn>
@@ -79,7 +88,7 @@
         </Columns>
     </RadzenDataGrid>
     <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
-        One barcode per piece, grouped by article no. Value = cost × pieces in stock. Double-click a row to edit the product.
+        Grouped by article no. Piece items: one row per barcode; quantity items (rice per kg): one row with the qty in stock. Value = cost × qty in stock. Double-click a row to edit the product.
     </RadzenText>
 </RadzenCard>
 

@@ -5,7 +5,8 @@ using GenZPOS.Components;
 namespace GenZPOS.Services;
 
 /// <summary>What goes on one barcode label (one piece = one stock item).</summary>
-public sealed record LabelData(string Barcode, string? ArticleNo, string ProductName, string? Colour, string? Size, decimal Price);
+/// <param name="PriceUnit">Quantity items: the price is per this unit ("Rs 180 / Kg"); null for pieces.</param>
+public sealed record LabelData(string Barcode, string? ArticleNo, string ProductName, string? Colour, string? Size, decimal Price, string? PriceUnit = null);
 
 /// <summary>
 /// Prints barcode labels straight to a label printer with GDI (<see cref="PrintDocument"/>, no dialog) — like BarTender,

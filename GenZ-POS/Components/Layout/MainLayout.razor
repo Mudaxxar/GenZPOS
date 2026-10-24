@@ -59,6 +59,10 @@
                 <RadzenPanelMenuItem Text="Item History" Icon="history" Path="stock/history" Visible="@Can(Permissions.StockView)" />
                 <RadzenPanelMenuItem Text="Stock In / Out" Icon="swap_vert" Path="stock/adjustments" Visible="@Can(Permissions.StockAdjust)" />
             </RadzenPanelMenuItem>
+            <RadzenPanelMenuItem Text="Money" Icon="account_balance_wallet" Expanded="true" Visible="@CanAny(Permissions.ExpensesManage, Permissions.DayClosing)">
+                <RadzenPanelMenuItem Text="Expenses" Icon="request_quote" Path="expenses" Visible="@Can(Permissions.ExpensesManage)" />
+                <RadzenPanelMenuItem Text="Day Closing" Icon="lock_clock" Path="day-closing" Visible="@Can(Permissions.DayClosing)" />
+            </RadzenPanelMenuItem>
             <RadzenPanelMenuItem Text="Reports" Icon="analytics" Expanded="true"
                                  Visible="@CanAny(Permissions.ReportsDayBook, Permissions.ReportsProfit, Permissions.ReportsItemSales, Permissions.ReportsBalances)">
                 <RadzenPanelMenuItem Text="Day Book (Cash)" Icon="today" Path="reports/daybook" Visible="@Can(Permissions.ReportsDayBook)" />
@@ -73,6 +77,7 @@
                 <RadzenPanelMenuItem Text="Categories" Icon="account_tree" Path="categories" />
             </RadzenPanelMenuItem>
             <RadzenPanelMenuItem Text="Users & Roles" Icon="manage_accounts" Path="users" Visible="@Can(Permissions.UsersManage)" />
+            <RadzenPanelMenuItem Text="Audit Log" Icon="policy" Path="audit" Visible="@Can(Permissions.AuditView)" />
             <RadzenPanelMenuItem Text="Settings & Backup" Icon="settings" Path="settings" Visible="@Can(Permissions.SettingsManage)" />
         </RadzenPanelMenu>
         <div class="rz-px-4 rz-py-2" style="font-size:0.75rem; opacity:0.6">@($"GenZ-POS v{AppConfig.Version}")</div>

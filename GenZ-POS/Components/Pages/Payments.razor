@@ -234,6 +234,9 @@
             {
                 await using var db = await DbFactory.CreateDbContextAsync();
                 await db.CustomerPayments.Where(x => x.Id == p.Id).ExecuteDeleteAsync();
+                Audit.Add(db, CurrentUser, Audit.PaymentDeleted,
+                    $"Customer payment #{p.Id} of {p.PaymentDate:dd-MMM-yyyy} from {p.Customer?.Name}: {p.Amount:N2} ({p.Method})", p.Id);
+                await db.SaveChangesAsync();
             }, "Payment deleted"))
         {
             await CustomerChangedAsync();

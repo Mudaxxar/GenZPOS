@@ -129,9 +129,15 @@ public class StockItemService(IDbContextFactory<AppDbContext> dbFactory, Current
         entity.Unit = string.IsNullOrWhiteSpace(product.Unit) ? "Pcs" : product.Unit.Trim();
         entity.MaxDiscountPercent = product.MaxDiscountPercent is { } max ? Math.Clamp(Math.Round(max, 2), 0, 100) : null;
         entity.IsActive = product.IsActive;
+        entity.StockMode = product.StockMode;
+        entity.PurchaseUnit = product.StockMode == StockMode.Quantity ? Clean(product.PurchaseUnit) : null;
+        entity.PurchaseUnitQty = entity.PurchaseUnit is null ? null : product.PurchaseUnitQty is decimal q && q > 0 ? Math.Round(q, 3) : null;
+        if (entity.PurchaseUnit is not null && entity.PurchaseUnitQty is null)
+            throw new BusinessException($"How many {entity.Unit} are in one {entity.PurchaseUnit}? (e.g. 50 kg in a bag)");
 
         // Existing stock items: colour, size, barcode, prices, active.
         var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var priceChanges = new List<string>();
         foreach (var change in edited)
         {
             var item = entity.StockItems.FirstOrDefault(x => x.Id == change.Id)
@@ -141,6 +147,9 @@ public class StockItemService(IDbContextFactory<AppDbContext> dbFactory, Current
             // An empty barcode box keeps the current one (every stock item must have one).
             if (Clean(change.Barcode) is { } barcode && !string.Equals(barcode, item.Barcode, StringComparison.OrdinalIgnoreCase))
                 item.Barcode = await ProductCodes.ResolveBarcodeAsync(db, barcode, item.Id, reserved);
+            if (item.SalePrice != change.SalePrice || item.PurchasePrice != change.PurchasePrice)
+                priceChanges.Add($"{item.Barcode} {item.VariantName}: price {item.SalePrice:N2} → {change.SalePrice:N2}" +
+                                 (item.PurchasePrice != change.PurchasePrice ? $", cost {item.PurchasePrice:N2} → {change.PurchasePrice:N2}" : ""));
             item.PurchasePrice = change.PurchasePrice;
             item.SalePrice = change.SalePrice;
             item.ReorderLevel = change.ReorderLevel;
@@ -154,6 +163,8 @@ public class StockItemService(IDbContextFactory<AppDbContext> dbFactory, Current
             article = await ProductCodes.ResolveArticleNoAsync(db, articleNo, entity.Id);
             (created, skipped) = await AddItemsAsync(db, entity, article, toCreate, prices, reserved);
         }
+        if (priceChanges.Count > 0)
+            Audit.Add(db, currentUser, Audit.PriceChanged, $"{entity.Name}: " + string.Join("; ", priceChanges), entity.Id == 0 ? null : entity.Id);
 
         await db.SaveChangesAsync();
         await tx.CommitAsync();

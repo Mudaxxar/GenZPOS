@@ -25,7 +25,7 @@ public class ProductExcelTests
 
     // Columns as exported.
     private const int Id = 1, Article = 2, Company = 3, Category = 4, Sub = 5, Name = 6, Shade = 7, Pack = 8, Size = 9, Unit = 10,
-        Barcode = 11, Cost = 12, Price = 13, MaxDiscount = 14, Reorder = 15, Active = 16, Opening = 17, InStock = 18;
+        Barcode = 11, Cost = 12, Price = 13, MaxDiscount = 14, Reorder = 15, Active = 16, Opening = 17, StockedBy = 18, InStock = 19;
 
     private const int BrushesSubCategoryId = 16; // seeded: Tools & Accessories › Brushes
 

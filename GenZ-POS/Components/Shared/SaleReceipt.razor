@@ -33,7 +33,7 @@
             <div class="r-item-name">@(i + 1). @item?.Product?.Name</div>
             <div class="r-item-sub">@string.Join(" · ", new[] { item?.ArticleNo, item?.Barcode, item?.Colour, item?.Size is { Length: > 0 } s ? $"Size {s}" : null }.Where(s => !string.IsNullOrWhiteSpace(s)))</div>
             <div class="r-row">
-                <span>@Fmt.Qty(l.Qty) × @Fmt.Money(l.Rate)</span>
+                <span>@Fmt.QtyUnit(l.Qty, l.StockItem?.Product?.Unit) × @Fmt.Money(l.Rate)</span>
                 <strong>@Fmt.Money(l.Amount)</strong>
             </div>
         </div>
@@ -61,7 +61,7 @@
                     <div class="r-item-name">@item?.Product?.Name</div>
                     <div class="r-item-sub">@string.Join(" · ", new[] { item?.ArticleNo, item?.Barcode, item?.Colour, item?.Size is { Length: > 0 } s ? $"Size {s}" : null }.Where(s => !string.IsNullOrWhiteSpace(s))) · inv #@r.SaleId</div>
                     <div class="r-row">
-                        <span>@Fmt.Qty(l.Qty) × @Fmt.Money(l.Rate)@(l.Amount < Math.Round(l.Qty * l.Rate, 2) ? " less disc." : "")</span>
+                        <span>@Fmt.QtyUnit(l.Qty, l.StockItem?.Product?.Unit) × @Fmt.Money(l.Rate)@(l.Amount < Math.Round(l.Qty * l.Rate, 2) ? " less disc." : "")</span>
                         <strong>- @Fmt.Money(l.Amount)</strong>
                     </div>
                 </div>

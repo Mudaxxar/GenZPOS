@@ -24,6 +24,12 @@ public sealed class AppConfig
     public bool AutoBackupDaily { get; set; } = true;
 
     /// <summary>
+    /// Second place every backup is copied to (owner 2026-10-24): a USB drive or a cloud-synced folder (Google Drive /
+    /// OneDrive), so a dead disk doesn't take the backups with it. Null = no copy. Per PC (drive letters differ).
+    /// </summary>
+    public string? BackupCopyFolder { get; set; }
+
+    /// <summary>
     /// This PC's receipt (thermal) printer, e.g. "POS-80". Receipts print straight to it (no dialog); null = not chosen
     /// yet (the receipt screen asks). Per PC, so it lives here, not in the shared database.
     /// </summary>

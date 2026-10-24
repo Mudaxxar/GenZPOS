@@ -119,8 +119,11 @@ else
                 .Select(g =>
                 {
                     var item = g.First().StockItem!;
-                    var label = new LabelData(item.Barcode, item.ArticleNo, item.Product?.Name ?? "", item.Colour, item.Size, item.SalePrice);
-                    return new LabelRow(label, Math.Max(1, (int)Math.Round(g.Sum(l => l.Qty))));
+                    var isQty = item.Product?.StockMode == StockMode.Quantity;
+                    var label = new LabelData(item.Barcode, item.ArticleNo, item.Product?.Name ?? "", item.Colour, item.Size, item.SalePrice,
+                        isQty ? item.Product!.Unit : null);
+                    // A piece: one label each. A quantity item (100 kg of rice): one shelf label (change Copies for more).
+                    return new LabelRow(label, isQty ? 1 : Math.Max(1, (int)Math.Round(g.Sum(l => l.Qty))));
                 })
                 .ToList();
             if (printer is null)

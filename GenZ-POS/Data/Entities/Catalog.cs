@@ -84,6 +84,23 @@ public class Product
 
     public bool IsActive { get; set; } = true;
 
+    /// <summary>
+    /// Piece = one barcode per piece (shoes, clothes: buying 3 makes 3 stock items, each sold once, qty 1).
+    /// Quantity = one stock item bought and sold again and again in any qty (rice by the kg, sugar, oil, paint tins).
+    /// New products start with the shop's default (Settings).
+    /// </summary>
+    public StockMode StockMode { get; set; } = StockMode.Piece;
+
+    /// <summary>Quantity products: the unit bought in, e.g. "Bag" (null = bought in <see cref="Unit"/>).</summary>
+    [MaxLength(20)]
+    public string? PurchaseUnit { get; set; }
+
+    /// <summary>Quantity products: <see cref="Unit"/>s in one <see cref="PurchaseUnit"/>, e.g. 50 (kg in a bag).</summary>
+    public decimal? PurchaseUnitQty { get; set; }
+
+    /// <summary>True when bought in a bigger unit than sold (Bag of 50 kg).</summary>
+    public bool HasPurchaseUnit => StockMode == StockMode.Quantity && !string.IsNullOrWhiteSpace(PurchaseUnit) && PurchaseUnitQty > 0;
+
     public List<StockItem> StockItems { get; set; } = [];
 
     /// <summary>"Zee Shoes · Shoes" (+ pack size).</summary>
@@ -141,4 +158,13 @@ public class StockItem
     public string DisplayName =>
         string.Join(" · ", new[] { Product?.Company?.Name, Product?.Name, Product?.PackSize, Colour, Size }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
+}
+
+/// <summary>How a product is stocked (owner 2026-10-24). Stored as int — never renumber.</summary>
+public enum StockMode
+{
+    /// <summary>One barcode per piece (shoes, clothes): qty 1 per stock item.</summary>
+    Piece = 0,
+    /// <summary>One barcode for the item, any qty bought / sold many times (rice per kg, sugar, oil).</summary>
+    Quantity = 1,
 }

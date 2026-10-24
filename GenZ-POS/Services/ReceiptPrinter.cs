@@ -128,7 +128,7 @@ public static class ReceiptPrinter
                 var details = string.Join(" · ", new[] { item?.ArticleNo, item?.Barcode, item?.Colour, item?.Size is { Length: > 0 } s ? $"Size {s}" : null }
                     .Where(s => !string.IsNullOrWhiteSpace(s)));
                 if (details.Length > 0) Left(details, small);
-                Row($"{Fmt.Qty(l.Qty)} x {Fmt.Money(l.Rate)}", Fmt.Money(l.Amount), normal, bold);
+                Row($"{Fmt.QtyUnit(l.Qty, l.StockItem?.Product?.Unit)} x {Fmt.Money(l.Rate)}", Fmt.Money(l.Amount), normal, bold);
                 y += 2;
             }
             Dashes();
@@ -153,7 +153,7 @@ public static class ReceiptPrinter
                             .Where(s => !string.IsNullOrWhiteSpace(s)));
                         Left(details, small);
                         var less = l.Amount < Math.Round(l.Qty * l.Rate, 2) ? " less disc." : "";
-                        Row($"{Fmt.Qty(l.Qty)} x {Fmt.Money(l.Rate)}{less}", "- " + Fmt.Money(l.Amount), normal, bold);
+                        Row($"{Fmt.QtyUnit(l.Qty, l.StockItem?.Product?.Unit)} x {Fmt.Money(l.Rate)}{less}", "- " + Fmt.Money(l.Amount), normal, bold);
                         y += 2;
                     }
                 Row("Returned total", "- " + Fmt.Money(ex.Returned), bold, bold);

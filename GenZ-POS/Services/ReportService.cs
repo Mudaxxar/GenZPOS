@@ -121,7 +121,11 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
               (SELECT ISNULL(SUM(Paid), 0) FROM Purchases WHERE PurchaseDate >= @Today AND PurchaseDate < @Tomorrow)
                 + (SELECT ISNULL(SUM(Amount), 0) FROM SupplierPayments WHERE Method = 0 AND PaymentDate >= @Today AND PaymentDate < @Tomorrow)
                 + (SELECT ISNULL(SUM(Refunded), 0) FROM SaleReturns WHERE ReturnDate >= @Today AND ReturnDate < @Tomorrow)
-                - (SELECT ISNULL(SUM(SetOff), 0) FROM xo WHERE ReturnDate >= @Today AND ReturnDate < @Tomorrow) AS CashOutToday,
+                - (SELECT ISNULL(SUM(SetOff), 0) FROM xo WHERE ReturnDate >= @Today AND ReturnDate < @Tomorrow)
+                + (SELECT ISNULL(SUM(Amount), 0) FROM Expenses WHERE Method = 0 AND ExpenseDate >= @Today AND ExpenseDate < @Tomorrow) AS CashOutToday,
+              (SELECT ISNULL(SUM(Amount), 0) FROM Expenses WHERE ExpenseDate >= @MonthStart AND ExpenseDate < @Tomorrow) AS ExpensesThisMonth,
+              (SELECT ISNULL(SUM(Amount), 0) FROM Expenses WHERE ExpenseDate >= @Today AND ExpenseDate < @Tomorrow) AS ExpensesToday,
+              (SELECT COUNT(*) FROM Expenses WHERE ExpenseDate >= @MonthStart AND ExpenseDate < @Tomorrow) AS ExpensesThisMonthCount,
               (SELECT ISNULL(SUM(Amount), 0) FROM CustomerPayments WHERE Method <> 0 AND PaymentDate >= @Today AND PaymentDate < @Tomorrow) AS NonCashInToday,
               (SELECT ISNULL(SUM(Balance), 0) FROM cb WHERE Balance > 0) AS Receivable,
               (SELECT COUNT(*) FROM cb WHERE Balance > 0) AS ReceivableCount,
@@ -332,6 +336,13 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
                      pr.SupplierId, su.Name, 'Cash', pr.Notes, pr.Received, 0, 0, 0
               FROM PurchaseReturns pr JOIN Suppliers su ON su.Id = pr.SupplierId
               WHERE pr.Received > 0 AND pr.ReturnDate >= @From AND pr.ReturnDate < @ToExclusive
+              UNION ALL
+              SELECT e.ExpenseDate, e.CreatedAt, 'Expense', CONCAT('Expense: ', ec.Name), e.Id,
+                     0, ISNULL(e.PaidTo, ''), {MethodSql("e.Method")}, e.Notes,
+                     0, CASE WHEN e.Method = 0 THEN e.Amount ELSE 0 END,
+                     0, CASE WHEN e.Method <> 0 THEN e.Amount ELSE 0 END
+              FROM Expenses e JOIN ExpenseCategories ec ON ec.Id = e.CategoryId
+              WHERE e.ExpenseDate >= @From AND e.ExpenseDate < @ToExclusive
             ) d
             ORDER BY d.[Date], d.CreatedAt, d.Kind, d.RefId
             """, p)).ToList();
@@ -344,7 +355,8 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
                  WHERE SaleDate >= @From AND SaleDate < @ToExclusive) AS CreditSales,
               (SELECT ISNULL(SUM(Total), 0) FROM SaleReturns WHERE ReturnDate >= @From AND ReturnDate < @ToExclusive) AS SaleReturns,
               (SELECT ISNULL(SUM(Total), 0) FROM Purchases WHERE PurchaseDate >= @From AND PurchaseDate < @ToExclusive) AS Purchases,
-              (SELECT ISNULL(SUM(Total), 0) FROM PurchaseReturns WHERE ReturnDate >= @From AND ReturnDate < @ToExclusive) AS PurchaseReturns
+              (SELECT ISNULL(SUM(Total), 0) FROM PurchaseReturns WHERE ReturnDate >= @From AND ReturnDate < @ToExclusive) AS PurchaseReturns,
+              (SELECT ISNULL(SUM(Amount), 0) FROM Expenses WHERE ExpenseDate >= @From AND ExpenseDate < @ToExclusive) AS Expenses
             """, p);
 
         return new DayBookReport(rows, totals);
@@ -357,19 +369,23 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
         var rows = await db.Database.GetDbConnection().QueryAsync<SalesProfitRow>($"""
             SELECT x.Period, SUM(x.Invoices) AS Invoices, SUM(x.Gross) AS GrossSales, SUM(x.Discount) AS Discount,
                    SUM(x.SalesTotal) AS SalesTotal, SUM(x.Returns) AS Returns,
-                   SUM(x.SaleCost) AS SaleCost, SUM(x.ReturnCost) AS ReturnCost
+                   SUM(x.SaleCost) AS SaleCost, SUM(x.ReturnCost) AS ReturnCost, SUM(x.Expenses) AS Expenses
             FROM (
               SELECT {PeriodSql("s.SaleDate")} AS Period, 1 AS Invoices, s.SubTotal AS Gross, s.Discount, s.Total AS SalesTotal,
                      CAST(0 AS decimal(18,2)) AS Returns,
                      (SELECT ISNULL(SUM(l.Qty * l.Cost), 0) FROM SaleLines l WHERE l.SaleId = s.Id) AS SaleCost,
-                     CAST(0 AS decimal(18,2)) AS ReturnCost
+                     CAST(0 AS decimal(18,2)) AS ReturnCost, CAST(0 AS decimal(18,2)) AS Expenses
               FROM Sales s
               WHERE s.SaleDate >= @From AND s.SaleDate < @ToExclusive
               UNION ALL
               SELECT {PeriodSql("r.ReturnDate")}, 0, 0, 0, 0, r.Total, 0,
-                     (SELECT ISNULL(SUM(l.Qty * l.Cost), 0) FROM SaleReturnLines l WHERE l.SaleReturnId = r.Id)
+                     (SELECT ISNULL(SUM(l.Qty * l.Cost), 0) FROM SaleReturnLines l WHERE l.SaleReturnId = r.Id), 0
               FROM SaleReturns r
               WHERE r.ReturnDate >= @From AND r.ReturnDate < @ToExclusive
+              UNION ALL
+              SELECT {PeriodSql("e.ExpenseDate")}, 0, 0, 0, 0, 0, 0, 0, e.Amount
+              FROM Expenses e
+              WHERE e.ExpenseDate >= @From AND e.ExpenseDate < @ToExclusive
             ) x
             GROUP BY x.Period
             ORDER BY x.Period
@@ -477,7 +493,7 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
         var rows = (await db.Database.GetDbConnection().QueryAsync<StockReportRow>($"""
             WITH r0 AS (
               SELECT v.Id, p.Id AS ProductId, co.Name AS Company, c.Name AS Category, sc.Name AS SubCategory,
-                     p.Name, v.ArticleNo, v.Colour, v.Size, v.Barcode, p.PackSize, p.Unit, v.PurchasePrice, v.SalePrice, v.ReorderLevel,
+                     p.Name, v.ArticleNo, v.Colour, v.Size, v.Barcode, p.PackSize, p.Unit, p.StockMode, v.PurchasePrice, v.SalePrice, v.ReorderLevel,
                      ISNULL(s.Qty, 0) AS OnHand,
                      ISNULL(s.Qty, 0) * v.PurchasePrice AS StockValue
               FROM StockItems v
@@ -544,7 +560,8 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
                    -- article no. and barcode at the end so the item pickers can be searched by them
                    CONCAT({VariantNameSql}, ' · ', v.ArticleNo, ' · ', v.Barcode) AS DisplayName,
                    co.Name AS Company, p.Name, v.Colour, v.Size,
-                   v.Barcode, v.ArticleNo, p.Unit, v.PurchasePrice, v.SalePrice, p.MaxDiscountPercent, ISNULL(s.Qty, 0) AS OnHand
+                   v.Barcode, v.ArticleNo, p.Unit, v.PurchasePrice, v.SalePrice, p.MaxDiscountPercent, ISNULL(s.Qty, 0) AS OnHand,
+                   p.StockMode, p.PurchaseUnit, p.PurchaseUnitQty
             FROM StockItems v
             JOIN Products p ON p.Id = v.ProductId
             JOIN Companies co ON co.Id = p.CompanyId
@@ -565,7 +582,8 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
         var rows = await db.Database.GetDbConnection().QueryAsync<ProductPick>("""
             SELECT p.Id,
                    CONCAT(co.Name, ' · ', p.Name, CASE WHEN p.PackSize IS NULL OR p.PackSize = '' THEN '' ELSE CONCAT(' · ', p.PackSize) END) AS DisplayName,
-                   p.Unit, ISNULL(st.Qty, 0) AS OnHand,
+                   p.Unit, p.StockMode, p.PurchaseUnit, p.PurchaseUnitQty, ISNULL(st.Qty, 0) AS OnHand,
+                   (SELECT TOP 1 i.Id FROM StockItems i WHERE i.ProductId = p.Id ORDER BY i.Id) AS FirstStockItemId,
                    ISNULL(last.PurchasePrice, 0) AS PurchasePrice, ISNULL(last.SalePrice, 0) AS SalePrice, ISNULL(last.ReorderLevel, 0) AS ReorderLevel
             FROM Products p
             JOIN Companies co ON co.Id = p.CompanyId
@@ -624,6 +642,13 @@ public class DashboardStats
     /// <summary>Cost of goods sold this month (sale lines − returned lines, at recorded cost).</summary>
     public decimal CostThisMonth { get; set; }
     public decimal GrossProfitThisMonth => SalesThisMonth - CostThisMonth;
+    /// <summary>Shop expenses this month (any method).</summary>
+    public decimal ExpensesThisMonth { get; set; }
+    public int ExpensesThisMonthCount { get; set; }
+    /// <summary>Shop expenses dated today (any method).</summary>
+    public decimal ExpensesToday { get; set; }
+    /// <summary>Net profit = gross profit − expenses.</summary>
+    public decimal NetProfitThisMonth => GrossProfitThisMonth - ExpensesThisMonth;
     /// <summary>Real cash in today: paid at counter + cash payments received + cash back on purchase returns.</summary>
     public decimal CashInToday { get; set; }
     /// <summary>Real cash out today: paid on bills + cash supplier payments + refunds on sales returns.</summary>
@@ -729,6 +754,7 @@ public class DayBookRow
         "Purchase" => $"Purchase #{RefId}",
         "SupplierPayment" => $"Payment #{RefId}",
         "PurchaseReturn" => $"Purchase return #{RefId}",
+        "Expense" => $"Expense #{RefId}",
         _ => $"#{RefId}",
     };
 
@@ -741,10 +767,11 @@ public class DayBookRow
         "Purchase" => $"purchases/{RefId}/edit",
         "SupplierPayment" => $"supplier-ledger/{PartyId}",
         "PurchaseReturn" => $"purchase-returns/{RefId}",
+        "Expense" => "expenses",
         _ => "",
     };
 
-    public string PartyLink => IsCustomer ? $"ledger/{PartyId}" : $"supplier-ledger/{PartyId}";
+    public string PartyLink => Kind == "Expense" ? "" : IsCustomer ? $"ledger/{PartyId}" : $"supplier-ledger/{PartyId}";
 }
 
 public class DayBookTotals
@@ -757,6 +784,8 @@ public class DayBookTotals
     public decimal SaleReturns { get; set; }
     public decimal Purchases { get; set; }
     public decimal PurchaseReturns { get; set; }
+    /// <summary>Shop expenses in the period (cash and non-cash).</summary>
+    public decimal Expenses { get; set; }
 }
 
 public record DayBookReport(List<DayBookRow> Rows, DayBookTotals Totals)
@@ -783,10 +812,16 @@ public class SalesProfitRow
     public decimal SaleCost { get; set; }
     public decimal ReturnCost { get; set; }
 
+    /// <summary>Shop expenses dated in the period (any payment method).</summary>
+    public decimal Expenses { get; set; }
+
     public decimal NetSales => SalesTotal - Returns;
     public decimal Cost => SaleCost - ReturnCost;
+    /// <summary>Gross profit = net sales − cost of goods.</summary>
     public decimal Profit => NetSales - Cost;
     public decimal? Margin => NetSales == 0 ? null : Math.Round(Profit / NetSales * 100, 1);
+    /// <summary>Net profit = gross profit − expenses (owner 2026-10-24).</summary>
+    public decimal NetProfit => Profit - Expenses;
 }
 
 public enum ItemSalesGroup
@@ -921,6 +956,9 @@ public class StockReportRow
     public decimal ReorderLevel { get; set; }
     public decimal OnHand { get; set; }
     public decimal StockValue { get; set; }
+    public StockMode StockMode { get; set; }
+    /// <summary>Quantity item (rice per kg): one row with its qty on hand, instead of one row per piece.</summary>
+    public bool IsQuantity => StockMode == StockMode.Quantity;
     /// <summary>Matching articles (the report pages by article).</summary>
     public int TotalCount { get; set; }
     public decimal TotalValue { get; set; }
@@ -953,6 +991,13 @@ public class ProductPick
     public decimal PurchasePrice { get; set; }
     public decimal SalePrice { get; set; }
     public decimal ReorderLevel { get; set; }
+    public StockMode StockMode { get; set; }
+    public string? PurchaseUnit { get; set; }
+    public decimal? PurchaseUnitQty { get; set; }
+    /// <summary>Quantity products: their stock item (the one barcode bought / sold again and again); null if none yet.</summary>
+    public int? FirstStockItemId { get; set; }
+    public bool IsQuantity => StockMode == StockMode.Quantity;
+    public bool HasPurchaseUnit => IsQuantity && !string.IsNullOrWhiteSpace(PurchaseUnit) && PurchaseUnitQty > 0;
 }
 
 public class ProductLookup
@@ -973,6 +1018,11 @@ public class ProductLookup
     public decimal SalePrice { get; set; }
     public decimal? MaxDiscountPercent { get; set; }
     public decimal OnHand { get; set; }
+    public StockMode StockMode { get; set; }
+    public string? PurchaseUnit { get; set; }
+    public decimal? PurchaseUnitQty { get; set; }
+    /// <summary>Quantity item (rice per kg): any qty, bought / sold again and again; else one piece per barcode.</summary>
+    public bool IsQuantity => StockMode == StockMode.Quantity;
 
     public decimal? MinRate => DiscountRules.MinRate(SalePrice, MaxDiscountPercent);
 

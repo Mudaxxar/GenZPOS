@@ -10,13 +10,19 @@
         <RadzenRequiredValidator Component="Name" Text="Please enter a name" />
         <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.5rem">
             <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => Dialogs.Close(null))" />
-            <RadzenButton ButtonType="ButtonType.Submit" Text="Add" Icon="add" />
+            <RadzenButton ButtonType="ButtonType.Submit" Text="@ButtonText" Icon="@ButtonIcon" />
         </RadzenStack>
     </RadzenStack>
 </RadzenTemplateForm>
 
 @code {
     [Parameter] public string Label { get; set; } = "Name";
+    /// <summary>Text already in the box (e.g. the till's "Hold as" suggests the customer).</summary>
+    [Parameter] public string? Initial { get; set; }
+    [Parameter] public string ButtonText { get; set; } = "Add";
+    [Parameter] public string ButtonIcon { get; set; } = "add";
+
+    protected override void OnInitialized() => model.Name = Initial ?? "";
 
     private readonly NameModel model = new();
 

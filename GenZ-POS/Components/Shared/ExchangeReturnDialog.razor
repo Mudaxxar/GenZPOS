@@ -43,9 +43,9 @@
                 </RadzenDataGridColumn>
                 <RadzenDataGridColumn Title="Qty" Width="100px" TextAlign="TextAlign.Right">
                     <Template>
-                        @if (context.Candidate.Line.Returnable > 1)
+                        @if (context.Candidate.Line.Returnable != 1)
                         {
-                            <RadzenNumeric TValue="decimal" @bind-Value="context.Qty" Min="1" Max="@context.Candidate.Line.Returnable" ShowUpDown="false" Style="width:100%" />
+                            <RadzenNumeric TValue="decimal" @bind-Value="context.Qty" Min="0.001m" Max="@context.Candidate.Line.Returnable" Format="0.###" ShowUpDown="false" Style="width:100%" />
                         }
                         else
                         {

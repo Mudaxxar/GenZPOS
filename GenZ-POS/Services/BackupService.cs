@@ -103,6 +103,7 @@ public class BackupService(IDbContextFactory<AppDbContext> dbFactory, AppConfig 
 
             var info = new FileInfo(path);
             AppLog.Info($"Backup created: {path}");
+            await CopyToSecondFolderAsync(path);
             return new BackupFile(info.Name, info.FullName, info.Exists ? info.LastWriteTime : now, info.Exists ? info.Length : 0);
         }
         catch (Exception ex)
@@ -159,6 +160,79 @@ public class BackupService(IDbContextFactory<AppDbContext> dbFactory, AppConfig 
             AppLog.Warn($"Could not list backups in {cfg.BackupFolder}", ex);
             return [];
         }
+    }
+
+    // ---------------- second copy (USB / cloud folder) ----------------
+
+    /// <summary>The USB / cloud folder backups are also copied to (appsettings.json, per PC); null = none.</summary>
+    public string? CopyFolder => string.IsNullOrWhiteSpace(cfg.BackupCopyFolder) ? null : cfg.BackupCopyFolder.Trim();
+
+    /// <summary>When a backup was last copied there (this session), and the last copy problem (null = fine).</summary>
+    public DateTime? LastCopyAt { get; private set; }
+    public string? LastCopyError { get; private set; }
+
+    /// <summary>Sets (or clears, with null) the copy folder and saves it to appsettings.json.</summary>
+    public void SetCopyFolder(string? folder)
+    {
+        folder = string.IsNullOrWhiteSpace(folder) ? null : folder.Trim();
+        if (folder is not null && !Path.IsPathFullyQualified(folder))
+            throw new BusinessException("Choose a full folder path, e.g. E:\\GenZ-POS-Backups or your Google Drive folder.");
+        if (folder is not null && string.Equals(Path.GetFullPath(folder).TrimEnd('\\'), Path.GetFullPath(cfg.BackupFolder).TrimEnd('\\'),
+                StringComparison.OrdinalIgnoreCase))
+            throw new BusinessException("The copy must go to another place than the backup folder itself (another drive, a USB or a cloud folder).");
+        cfg.BackupCopyFolder = folder;
+        cfg.Save();
+        LastCopyError = null;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Copies the newest backup to the copy folder now (e.g. after plugging in the USB). Returns the copied file.</summary>
+    public async Task<string> CopyNewestNowAsync()
+    {
+        if (CopyFolder is null) throw new BusinessException("Choose the USB / cloud folder first.");
+        var newest = ListBackups(1).FirstOrDefault()
+                     ?? throw new BusinessException("There is no backup yet. Press \"Back up now\" first.");
+        await CopyToSecondFolderAsync(newest.FullPath);
+        if (LastCopyError is not null) throw new BusinessException(LastCopyError);
+        return Path.Combine(CopyFolder, newest.Name);
+    }
+
+    /// <summary>
+    /// Copies a finished backup to <see cref="CopyFolder"/> and keeps its newest <c>KeepBackups</c> there too. Never
+    /// throws: a missing USB or a full disk only sets <see cref="LastCopyError"/> (the backup itself is fine).
+    /// </summary>
+    private async Task CopyToSecondFolderAsync(string backupPath)
+    {
+        if (CopyFolder is not { } folder) return;
+        try
+        {
+            var root = Path.GetPathRoot(folder);
+            if (!string.IsNullOrEmpty(root) && !Directory.Exists(root))
+                throw new IOException($"Drive {root} is not connected (USB unplugged?).");
+            Directory.CreateDirectory(folder);
+            var target = Path.Combine(folder, Path.GetFileName(backupPath));
+            var temp = target + ".copying";
+            // Copy to a temporary name first, so a half-copied file (USB pulled out) never looks like a backup.
+            await Task.Run(() =>
+            {
+                File.Copy(backupPath, temp, overwrite: true);
+                File.Move(temp, target, overwrite: true);
+            });
+            foreach (var old in new DirectoryInfo(folder).GetFiles($"{DbName}_*.bak").OrderByDescending(f => f.LastWriteTime).Skip(Math.Max(1, cfg.KeepBackups)))
+            {
+                try { old.Delete(); }
+                catch (Exception ex) { AppLog.Warn($"Could not delete old backup copy {old.FullName}", ex); }
+            }
+            LastCopyAt = DateTime.Now;
+            LastCopyError = null;
+            AppLog.Info($"Backup copied to {target}");
+        }
+        catch (Exception ex)
+        {
+            LastCopyError = $"The backup was made, but copying it to {folder} failed: {ex.Message}";
+            AppLog.Warn(LastCopyError, ex);
+        }
+        Changed?.Invoke();
     }
 
     /// <summary>Keeps the newest <c>KeepBackups</c> files, deletes older ones.</summary>

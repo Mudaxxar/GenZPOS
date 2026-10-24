@@ -43,8 +43,9 @@ else
         <StatCard Title="Sales this month" Value="@Money(stats.SalesThisMonth)"
                   Note="@(stats.ReturnsThisMonth > 0 ? $"Invoiced {Money(stats.SalesThisMonth + stats.ReturnsThisMonth)} − returns {Money(stats.ReturnsThisMonth)}" : "After returns")"
                   Icon="calendar_month" Href="reports/sales-profit" />
-        <StatCard Title="Gross profit this month" Value="@Money(stats.GrossProfitThisMonth)" Danger="@(stats.GrossProfitThisMonth < 0)"
-                  Note="@(stats.SalesThisMonth == 0 ? "Net sales − cost of goods" : $"Margin {Math.Round(stats.GrossProfitThisMonth / stats.SalesThisMonth * 100, 1):0.#}%")"
+        @* Owner 2026-10-24: real profit = gross profit − expenses. *@
+        <StatCard Title="Net profit this month" Value="@Money(stats.NetProfitThisMonth)" Danger="@(stats.NetProfitThisMonth < 0)"
+                  Note="@($"Gross {Money(stats.GrossProfitThisMonth)}" + (stats.SalesThisMonth == 0 ? "" : $" ({Math.Round(stats.GrossProfitThisMonth / stats.SalesThisMonth * 100, 1):0.#}%)") + $" − expenses {Money(stats.ExpensesThisMonth)}")"
                   Icon="trending_up" Href="reports/sales-profit" />
         <StatCard Title="Customer receivable" Value="@Money(stats.Receivable)"
                   Note="@($"{stats.ReceivableCount} customer(s)" + (stats.CustomerAdvances > 0 ? $" · advances {Money(stats.CustomerAdvances)}" : ""))"
@@ -53,8 +54,10 @@ else
                   Note="@($"{stats.PayableCount} supplier(s) · paid today {Money(stats.PaidToSuppliersToday)}")" Icon="local_shipping" Href="reports/payables" />
         <StatCard Title="Stock value" Value="@Money(stats.StockValue)" Note="Active items at purchase price" Icon="inventory_2" Href="stock" />
         <StatCard Title="Low stock items" Value="@stats.LowStockCount.ToString()" Note="At or below alert level" Icon="warning" Href="stock?low=true" />
-        <StatCard Title="Out of stock" Value="@stats.OutOfStockCount.ToString()" Note="Active items with no stock" Icon="remove_shopping_cart" Href="stock?out=true"
-                  Danger="@(stats.OutOfStockCount > 0)" />
+        @* Owner 2026-10-24: total expenses instead of "Out of stock"; click → the expense list. *@
+        <StatCard Title="Total expenses this month" Value="@Money(stats.ExpensesThisMonth)"
+                  Note="@($"{stats.ExpensesThisMonthCount} expense(s) · today {Money(stats.ExpensesToday)}")" Icon="request_quote"
+                  Href="@(Can(Permissions.ExpensesManage) ? "expenses" : null)" />
     </RadzenRow>
 
     <RadzenRow Gap="1rem">

@@ -247,6 +247,9 @@ public partial class App : Application
         services.AddScoped<PurchaseReturnService>();
         services.AddScoped<ProductExcelService>();
         services.AddScoped<StockItemService>();
+        services.AddScoped<ExpenseService>();
+        services.AddScoped<DayClosingService>();
+        services.AddScoped<HeldSaleService>();
         services.AddSingleton<ShopInfo>();
         services.AddSingleton<BackupService>();
 

@@ -17,6 +17,8 @@ public class AppSetting
     public const string ShowNameWithLogo = "Shop.ShowNameWithLogo";
     /// <summary>Barcode label layout as JSON (Services/LabelDesign; designed in Settings → Barcode label).</summary>
     public const string LabelDesign = "Label.Design";
+    /// <summary>How new products are stocked (StockMode): Piece (one barcode per piece) or Quantity.</summary>
+    public const string DefaultStockMode = "Product.DefaultStockMode";
     public const string BackupFolder = "Backup.Folder";
     public const string LastBackupAt = "Backup.LastAt";
 

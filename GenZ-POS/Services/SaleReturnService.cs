@@ -53,7 +53,8 @@ public sealed class ExchangePick(ExchangeCandidate candidate)
 {
     public ExchangeCandidate Candidate { get; } = candidate;
     public bool Selected { get; set; }
-    public decimal Qty { get; set; } = 1;
+    // 1 piece; for a quantity line with less than 1 left (0.5 kg), all of it.
+    public decimal Qty { get; set; } = Math.Min(1, candidate.Line.Returnable);
     /// <summary>What the customer paid for it (same amount SaleReturnService saves).</summary>
     public decimal Amount => Candidate.Line.AmountFor(Qty);
 }
@@ -261,6 +262,8 @@ public class SaleReturnService(IDbContextFactory<AppDbContext> dbFactory, Curren
             .Where(m => m.Type == StockMovementType.SaleReturn && m.RefId == id)
             .ExecuteDeleteAsync();
         db.SaleReturns.Remove(ret);
+        Audit.Add(db, currentUser, Audit.SaleReturnDeleted,
+            $"Return #{id} of {ret.ReturnDate:dd-MMM-yyyy} (invoice #{ret.SaleId}): {ret.Lines.Count} line(s), total {ret.Total:N2}, refunded {ret.Refunded:N2}", id);
         await db.SaveChangesAsync();
         await tx.CommitAsync();
     }

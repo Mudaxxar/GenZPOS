@@ -53,8 +53,20 @@ public class ShopInfo(IDbContextFactory<AppDbContext> dbFactory)
             catch (FormatException ex) { AppLog.Warn("The saved shop logo is damaged; it is ignored.", ex); }
         }
         LogoDataUri = Logo is null ? null : "data:image/png;base64," + Convert.ToBase64String(Logo);
+        DefaultStockMode = Enum.TryParse<StockMode>(map.GetValueOrDefault(AppSetting.DefaultStockMode), out var mode) ? mode : StockMode.Piece;
         LabelDesign = LabelDesign.FromJson(map.GetValueOrDefault(AppSetting.LabelDesign)) ?? LabelDesign.Default(withShopName: Logo is null);
         Changed?.Invoke();
+    }
+
+    /// <summary>How new products are stocked (Settings → Products): Piece (shoes) or Quantity (rice per kg).</summary>
+    public StockMode DefaultStockMode { get; private set; } = StockMode.Piece;
+
+    public async Task SaveDefaultStockModeAsync(StockMode mode)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        await SetAsync(db, AppSetting.DefaultStockMode, mode.ToString());
+        await db.SaveChangesAsync();
+        await LoadAsync();
     }
 
     /// <summary>Saves the barcode label layout (null = back to the default layout).</summary>

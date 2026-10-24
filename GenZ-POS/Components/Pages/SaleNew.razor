@@ -96,15 +96,36 @@
             <RadzenFormField Text="Size" class="readonly-field">
                 <RadzenTextBox Value="@Picked?.Size" ReadOnly="true" tabindex="-1" />
             </RadzenFormField>
-            @* One barcode per piece (owner): a stock item is one piece, so qty is always 1 — read-only. *@
-            <RadzenFormField Text="Qty" class="readonly-field">
-                <RadzenTextBox Value="1" ReadOnly="true" tabindex="-1" Style="text-align:right" />
-            </RadzenFormField>
+            @* Piece items (owner: one barcode per piece): qty is always 1 — read-only. Quantity items (rice per kg): any qty,
+               with quick ½ / ¼ buttons under the strip. *@
+            @if (Picked is { IsQuantity: true } qi)
+            {
+                <RadzenFormField Text="@($"Qty ({qi.Unit})")">
+                    <RadzenNumeric @ref="qtyBox" TValue="decimal" @bind-Value="pickQty" Min="0" ShowUpDown="false" Format="0.###" TextAlign="TextAlign.Right" />
+                </RadzenFormField>
+            }
+            else
+            {
+                <RadzenFormField Text="Qty" class="readonly-field">
+                    <RadzenTextBox Value="1" ReadOnly="true" tabindex="-1" Style="text-align:right" />
+                </RadzenFormField>
+            }
             <RadzenFormField Text="Rate (Rs)">
                 <RadzenNumeric @ref="rateBox" TValue="decimal" @bind-Value="pickRate" Min="0" ShowUpDown="false" Format="N2" TextAlign="TextAlign.Right" />
             </RadzenFormField>
-            <RadzenButton Icon="add_shopping_cart" Text="Add" Click="AddPicked" Disabled="@(pickId is null)"
+            <RadzenButton Icon="add_shopping_cart" Text="Add" Click="AddPicked" Disabled="@(pickId is null || pickQty <= 0)"
                           class="till-add" data-enter-submit="true" />
+            @if (Picked is { IsQuantity: true } qq)
+            {
+                <div class="quick-qty">
+                    @foreach (var (text, value) in QuickQty(qq.Unit))
+                    {
+                        <RadzenButton Text="@text" Size="ButtonSize.Small" Variant="@(pickQty == value ? Variant.Flat : Variant.Outlined)"
+                                      ButtonStyle="ButtonStyle.Base" tabindex="-1" Click="@(() => pickQty = value)" />
+                    }
+                    <span class="quick-qty-amount">= @Money(Math.Round(pickQty * pickRate, 2)) · @Qty(qq.OnHand - InCartQty(qq.Id)) @qq.Unit left</span>
+                </div>
+            }
         </div>
 
         @* ---------- Cart ---------- *@
@@ -162,8 +183,20 @@
                         </Template>
                     </RadzenDataGridColumn>
                     @* One piece per barcode: qty is always 1, not editable (remove the line instead). *@
-                    <RadzenDataGridColumn Title="Qty" Width="70px" TextAlign="TextAlign.Center">
-                        <Template><span class="cart-qty">@Qty(context.Qty)</span></Template>
+                    <RadzenDataGridColumn Title="Qty" Width="100px" TextAlign="TextAlign.Center">
+                        <Template>
+                            @if (Product(context.StockItemId) is { IsQuantity: true } qp)
+                            {
+                                @* Quantity item: the kg can still be changed in the cart. *@
+                                <RadzenNumeric TValue="decimal" @bind-Value="context.Qty" @bind-Value:after="ClampPaid" Min="0.001m" ShowUpDown="false"
+                                               Format="0.###" TextAlign="TextAlign.Right" Style="width:100%" />
+                                <div class="cart-sub">@qp.Unit</div>
+                            }
+                            else
+                            {
+                                <span class="cart-qty">@Qty(context.Qty)</span>
+                            }
+                        </Template>
                     </RadzenDataGridColumn>
                     <RadzenDataGridColumn Title="Rate" Width="130px" TextAlign="TextAlign.Right">
                         <Template>
@@ -350,6 +383,13 @@
             <RadzenButton Text="Save & Print  (F9)" Icon="print" Size="ButtonSize.Large" IsBusy="Busy"
                           Click="@(() => SaveAsync(print: true))" Disabled="@(lines.Count == 0 || DiscountProblem is not null)"
                           data-enter-submit="true" data-hotkey="F9" class="pay-button" />
+            @* Hold / park (owner 2026-10-24): put this cart aside to serve the next customer; Held brings one back. *@
+            <div class="panel-actions-row">
+                <RadzenButton Text="Hold  (F7)" Icon="pause_circle" Variant="Variant.Outlined" ButtonStyle="ButtonStyle.Secondary"
+                              Disabled="@(lines.Count == 0)" Click="HoldAsync" data-hotkey="F7" title="Put this cart aside and serve the next customer" />
+                <RadzenButton Text="@($"Held ({heldCount})")" Icon="playlist_play" Variant="@(heldCount > 0 ? Variant.Flat : Variant.Text)"
+                              ButtonStyle="@(heldCount > 0 ? ButtonStyle.Warning : ButtonStyle.Base)" Click="ShowHeldAsync" title="Carts put aside: bring one back" />
+            </div>
             <div class="panel-actions-row">
                 <RadzenButton Text="Save only" Icon="save" Variant="Variant.Outlined" IsBusy="Busy"
                               Click="@(() => SaveAsync(print: false))" Disabled="@(lines.Count == 0 || DiscountProblem is not null)" />
@@ -396,7 +436,25 @@
     /// Items that can still be added (owner): in stock and not already in the cart — one barcode is one piece, so a
     /// piece in the cart disappears from the search (and comes back if its line is removed).
     /// </summary>
-    private IEnumerable<ProductLookup> InStock => products.Where(p => p.OnHand > 0 && !lines.Any(l => l.StockItemId == p.Id));
+    private IEnumerable<ProductLookup> InStock => products.Where(p => p.IsQuantity
+        ? p.OnHand - InCartQty(p.Id) > 0                                        // rice: as long as some is left
+        : p.OnHand > 0 && !lines.Any(l => l.StockItemId == p.Id));
+
+    /// <summary>Qty of a stock item already in the cart.</summary>
+    private decimal InCartQty(int stockItemId) => lines.Where(l => l.StockItemId == stockItemId).Sum(l => l.Qty);
+
+    // ---- Quantity items (owner 2026-10-24: rice / sugar sold by the kg) ----
+    private decimal pickQty = 1;
+    private RadzenNumeric<decimal> qtyBox = default!;
+
+    /// <summary>Quick qty buttons: 1 · ½ · ¼ · 100 g for kg / ltr, 1 · 2 · 5 · 10 otherwise.</summary>
+    private static IEnumerable<(string Text, decimal Value)> QuickQty(string unit) =>
+        unit.Trim().ToLowerInvariant() switch
+        {
+            "kg" => [("1 kg", 1m), ("½ kg", 0.5m), ("¼ kg", 0.25m), ("100 g", 0.1m)],
+            "ltr" or "l" => [("1 L", 1m), ("½ L", 0.5m), ("¼ L", 0.25m)],
+            _ => [("1", 1m), ("2", 2m), ("5", 5m), ("10", 10m)],
+        };
 
     /// <summary>
     /// Matches for what is typed, in stock only: an exact barcode / article no. first, then items whose barcode,
@@ -490,6 +548,7 @@
     protected override async Task OnInitializedAsync()
     {
         await LoadLookupsAsync();
+        await RefreshHeldCountAsync();
     }
 
     private Task<bool> LoadLookupsAsync() => RunAsync(async () =>
@@ -612,6 +671,7 @@
         {
             pickRate = p.SalePrice;
             itemText = p.DisplayName;
+            pickQty = 1;
         }
     }
 
@@ -632,24 +692,49 @@
         pickId = item.Id;
         ItemPicked();
         StateHasChanged();
-        try { await rateBox.FocusAsync(); }
-        catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or InvalidOperationException) { /* page closing */ }
+        // Quantity item: the cursor goes to Qty (how many kg); a piece: to Rate.
+        try
+        {
+            if (item.IsQuantity) await qtyBox.FocusAsync();
+            else await rateBox.FocusAsync();
+        }
+        catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or InvalidOperationException or NullReferenceException) { /* page closing */ }
     }
 
     private async Task AddPicked()
     {
-        if (pickId is not int id) return;
-        if (!InCart(id))
+        if (pickId is not int id || pickQty <= 0) return;
+        if (Product(id) is { IsQuantity: true } q)
+        {
+            // Rice again at the same rate → more kg on that line; otherwise a new line. Never more than is left.
+            var left = q.OnHand - InCartQty(id);
+            if (pickQty > left)
+            {
+                Toast(NotificationSeverity.Warning, $"Only {Qty(left)} {q.Unit} of {q.Name} left in stock.", 4000);
+                return;
+            }
+            if (lines.FirstOrDefault(l => l.StockItemId == id && l.Rate == pickRate) is { } same)
+                same.Qty = Math.Round(same.Qty + pickQty, 3);
+            else
+                lines.Add(new SaleLine { StockItemId = id, Qty = Math.Round(pickQty, 3), Rate = pickRate });
+            ClampPaid();
+            await linesGrid.Reload();
+        }
+        else if (!InCart(id))
+        {
             await AddLineAsync(id, pickRate);
+        }
         pickId = null;
         itemText = null;
         pickRate = 0;
+        pickQty = 1;
         await scanBox.FocusAsync(); // ready for the next scan
     }
 
-    /// <summary>One barcode = one piece: it can be in the cart only once (says so when it already is).</summary>
+    /// <summary>One barcode = one piece: it can be in the cart only once (says so when it already is). Quantity items: never.</summary>
     private bool InCart(int stockItemId)
     {
+        if (Product(stockItemId)?.IsQuantity == true) return false;
         if (!lines.Any(l => l.StockItemId == stockItemId)) return false;
         var item = Product(stockItemId);
         Toast(NotificationSeverity.Info, $"{item?.Barcode} is already in the cart (each barcode is one piece).", 4000);
@@ -700,6 +785,135 @@
         }
         if (await RunAsync(async () => id = await Sales.CreateAsync(sale), "Invoice saved"))
             Nav.NavigateTo(print ? $"sales/{id}?print=true" : $"sales/{id}");
+    }
+
+    // ---- Hold / park a sale (owner 2026-10-24) ----
+    [Inject] private HeldSaleService Held { get; set; } = default!;
+    private int heldCount;
+
+    private async Task RefreshHeldCountAsync()
+    {
+        try { heldCount = await Held.CountAsync(); }
+        catch (Exception ex) { AppLog.Warn("Could not count held sales", ex); }
+    }
+
+    /// <summary>Puts the cart aside under a name (the customer's by default) and starts a clean one.</summary>
+    private async Task HoldAsync()
+    {
+        if (lines.Count == 0) return;
+        if (HasReturns)
+        {
+            Toast(NotificationSeverity.Warning, "An exchange (returned items) can't be held. Finish it, or clear it first.", 5000);
+            return;
+        }
+        var suggested = IsWalkIn ? $"Customer {heldCount + 1}" : customers.FirstOrDefault(c => c.Id == customerId)?.Label;
+        if (await Dialogs.OpenAsync<NamePromptDialog>("Hold this sale",
+                new Dictionary<string, object?>
+                {
+                    [nameof(NamePromptDialog.Label)] = "Name to find it again (customer, colour of shirt …)",
+                    [nameof(NamePromptDialog.Initial)] = suggested,
+                    [nameof(NamePromptDialog.ButtonText)] = "Hold",
+                    [nameof(NamePromptDialog.ButtonIcon)] = "pause_circle",
+                }, new DialogOptions { Width = "440px" }) is not string label)
+            return;
+        var cart = new HeldCart(customerId, lines.Select(l => new HeldLine(l.StockItemId, l.Qty, l.Rate)).ToList(), discountValue, discountIsPercent, notes);
+        if (!await RunAsync(() => Held.HoldAsync(cart, label, Total), $"\"{label}\" held — serve the next customer")) return;
+        await ResetCartAsync();
+        await RefreshHeldCountAsync();
+        await scanBox.FocusAsync();
+    }
+
+    /// <summary>The held carts: bring one back (the current cart is held first, so nothing is lost) or delete it.</summary>
+    private async Task ShowHeldAsync()
+    {
+        List<HeldSaleInfo> list = [];
+        if (!await RunAsync(async () => list = await Held.ListAsync())) return;
+        heldCount = list.Count;
+        if (list.Count == 0)
+        {
+            Toast(NotificationSeverity.Info, "No sales on hold.");
+            return;
+        }
+        var picked = await Dialogs.OpenAsync("Sales on hold", _ =>
+            @<RadzenStack Gap="0.5rem">
+                <RadzenDataGrid TItem="HeldSaleInfo" Data="@list" Density="Density.Compact" AllowPaging="false">
+                    <Columns>
+                        <RadzenDataGridColumn Title="Name"><Template Context="h"><strong>@h.Label</strong><div style="font-size:.8rem;opacity:.7">@h.Customer</div></Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Items" Width="70px" TextAlign="TextAlign.Center"><Template Context="h">@h.ItemCount</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Total" Width="120px" TextAlign="TextAlign.Right"><Template Context="h">@Money(h.Total)</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Held" Width="120px"><Template Context="h">@h.HeldAt.ToString("HH:mm") · @h.HeldBy</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Width="150px" TextAlign="TextAlign.Right">
+                            <Template Context="h">
+                                <RadzenButton Text="Resume" Icon="play_arrow" Size="ButtonSize.Small" Click="@(() => Dialogs.Close(h.Id))" />
+                                <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete (customer left)"
+                                              Click="@(() => Dialogs.Close(-h.Id))" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">Stock is not reserved for held sales; it is checked again when the sale is saved.</RadzenText>
+            </RadzenStack>,
+            new DialogOptions { Width = "720px", CloseDialogOnOverlayClick = true });
+
+        if (picked is not int id) return;
+        if (id < 0)
+        {
+            if (await ConfirmAsync("Delete this held sale? (The customer left.)"))
+                await RunAsync(() => Held.DeleteAsync(-id), "Held sale deleted");
+            await RefreshHeldCountAsync();
+            return;
+        }
+        // Something in the cart already: hold it first so it isn't lost.
+        if (lines.Count > 0)
+        {
+            if (HasReturns)
+            {
+                Toast(NotificationSeverity.Warning, "Finish or clear the exchange in the cart first.", 5000);
+                return;
+            }
+            var current = new HeldCart(customerId, lines.Select(l => new HeldLine(l.StockItemId, l.Qty, l.Rate)).ToList(), discountValue, discountIsPercent, notes);
+            if (!await RunAsync(() => Held.HoldAsync(current, $"Held at {DateTime.Now:HH:mm}", Total))) return;
+        }
+        HeldCart? cart = null;
+        if (!await RunAsync(async () => cart = await Held.ResumeAsync(id))) return;
+        if (cart is null)
+        {
+            Toast(NotificationSeverity.Warning, "That sale was already taken back on another counter.", 5000);
+            await RefreshHeldCountAsync();
+            return;
+        }
+        await ResetCartAsync();
+        await LoadLookupsAsync(); // fresh stock
+        lines = cart.Lines.Where(l => productMap.ContainsKey(l.StockItemId))
+            .Select(l => new SaleLine { StockItemId = l.StockItemId, Qty = l.Qty, Rate = l.Rate }).ToList();
+        customerId = customers.Any(c => c.Id == cart.CustomerId) ? cart.CustomerId : Customer.WalkInId;
+        await CustomerChangedAsync();
+        discountValue = cart.DiscountValue;
+        discountIsPercent = cart.DiscountIsPercent;
+        notes = cart.Notes;
+        ClampPaid();
+        await RefreshHeldCountAsync();
+        var gone = cart.Lines.Count - lines.Count;
+        var sold = lines.Count(l => l.Qty > (Product(l.StockItemId)?.OnHand ?? 0));
+        Toast(gone + sold == 0 ? NotificationSeverity.Success : NotificationSeverity.Warning,
+            gone + sold == 0 ? "Sale brought back" : $"Sale brought back: {gone + sold} item(s) are no longer in stock (marked red).", 5000);
+        await linesGrid.Reload();
+    }
+
+    /// <summary>An empty cart and checkout (no question asked), keeping the date.</summary>
+    private async Task ResetCartAsync()
+    {
+        lines = [];
+        returns = [];
+        discountValue = paid = 0;
+        discountIsPercent = false;
+        tendered = null;
+        notes = null;
+        pickId = null;
+        itemText = null;
+        customerId = Customer.WalkInId;
+        await CustomerChangedAsync();
+        await linesGrid.Reload();
     }
 
     private async Task ClearAsync()

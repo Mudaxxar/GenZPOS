@@ -16,7 +16,8 @@ namespace GenZPOS.Services;
 public sealed record ProductImportRow(
     int Row, int? Id, string? ArticleNo, string Company, string Category, string SubCategory, string Name, string? Shade,
     string? PackSize, string? Size, string? Unit, string? Barcode, decimal? PurchasePrice, decimal? SalePrice,
-    decimal? MaxDiscountPercent, bool ClearMaxDiscount, decimal? ReorderLevel, bool? IsActive, decimal? OpeningQty = null);
+    decimal? MaxDiscountPercent, bool ClearMaxDiscount, decimal? ReorderLevel, bool? IsActive, decimal? OpeningQty = null,
+    StockMode? Mode = null);
 
 public enum ProductImportAction { Add, Update, Unchanged }
 
@@ -44,6 +45,9 @@ public sealed class ProductImportPlan
     /// stock history are skipped (listed in <see cref="OpeningSkipped"/>), so a file imported twice never doubles stock.
     /// </summary>
     public bool ForPurchase { get; init; }
+
+    /// <summary>How new products in the file are stocked when the row has no "Stocked by" (the shop default).</summary>
+    public StockMode DefaultMode { get; init; }
 
     /// <summary>Columns present in the file. A missing column (e.g. an older export) keeps the product's current value.</summary>
     public required IReadOnlySet<string> Columns { get; init; }
@@ -81,7 +85,7 @@ public sealed class ProductImportPlan
 /// max discount / reorder / active cells keep the current value; a column missing from the file keeps it too. An
 /// import is all-or-nothing: any error row stops it.
 /// </summary>
-public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser currentUser)
+public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser currentUser, ShopInfo? shop = null)
 {
     public const string FileFilter = "Excel workbook (*.xlsx)|*.xlsx";
     private const string SheetName = "Products";
@@ -108,7 +112,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
     private static readonly string[] Headers =
     [
         "Id", "Article no", "Company", "Category", "Sub-category", "Product", "Shade", "Pack size", "Size", "Unit", "Barcode",
-        "Purchase price", "Sale price", "Max discount %", "Reorder level", "Active", "Opening stock",
+        "Purchase price", "Sale price", "Max discount %", "Reorder level", "Active", "Opening stock", "Stocked by",
     ];
 
     private static int Col(string header) => Array.IndexOf(Headers, header) + 1;
@@ -135,6 +139,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
         ["active"] = "Active",
         ["openingstock"] = "Opening stock", ["opening"] = "Opening stock", ["openingqty"] = "Opening stock",
         ["qty"] = "Opening stock", ["quantity"] = "Opening stock",
+        ["stockedby"] = "Stocked by", ["stockmode"] = "Stocked by", ["mode"] = "Stocked by",
     };
 
     // ---------------- export ----------------
@@ -152,7 +157,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
             {
                 v.Id, v.ProductId, Company = v.Product!.Company!.Name, Category = v.Product.SubCategory!.Category!.Name,
                 SubCategory = v.Product.SubCategory.Name, v.Product.Name, v.Colour, v.Product.PackSize, v.Size, v.ArticleNo,
-                v.Product.Unit, v.Barcode, v.PurchasePrice, v.SalePrice, v.Product.MaxDiscountPercent, v.ReorderLevel, v.IsActive,
+                v.Product.Unit, v.Barcode, v.PurchasePrice, v.SalePrice, v.Product.MaxDiscountPercent, v.ReorderLevel, v.IsActive, v.Product.StockMode,
             })
             .ToListAsync();
         // Sizes of one article in size order (40, 41 … 45; S, M, L), not text order (10 before 6).
@@ -202,6 +207,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
             ws.Cell(r, Col("Max discount %")).Value = v.MaxDiscountPercent;
             ws.Cell(r, Col("Reorder level")).Value = v.ReorderLevel;
             ws.Cell(r, Col("Active")).Value = v.IsActive ? "Yes" : "No";
+            ws.Cell(r, Col("Stocked by")).Value = v.StockMode == StockMode.Quantity ? "Quantity" : "Piece";
             ws.Cell(r, stockCol).Value = onHand.GetValueOrDefault(v.Id);
             r++;
         }
@@ -212,15 +218,15 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
         ws.Cell(1, stockCol).Style.Font.Bold = true;
         ws.Cell(1, stockCol).Style.Fill.BackgroundColor = XLColor.FromHtml("#EEEEEE");
         ws.Column(stockCol).Style.Font.FontColor = XLColor.Gray;
-        ws.Column(stockCol).Style.NumberFormat.Format = "0.##";
+        ws.Column(stockCol).Style.NumberFormat.Format = "0.###";
         ws.Column(Col("Id")).Style.Font.FontColor = XLColor.Gray;
         // Barcodes and article numbers stay text (no 8.90E+12, no lost leading zeros).
         ws.Column(Col("Barcode")).Style.NumberFormat.Format = "@";
         ws.Column(Col("Article no")).Style.NumberFormat.Format = "@";
         ws.Range(2, Col("Purchase price"), Math.Max(r, 2), Col("Sale price")).Style.NumberFormat.Format = "#,##0.00";
-        ws.Column(Col("Max discount %")).Style.NumberFormat.Format = "0.##";
+        ws.Column(Col("Max discount %")).Style.NumberFormat.Format = "0.###";
         // Exported empty on purpose: type the qty in the shop for new products (see Help).
-        ws.Column(Col("Opening stock")).Style.NumberFormat.Format = "0.##";
+        ws.Column(Col("Opening stock")).Style.NumberFormat.Format = "0.###";
         ws.Cell(1, Col("Opening stock")).Style.Fill.BackgroundColor = XLColor.FromHtml("#E2EFDA");
         ws.Range(1, 1, Math.Max(r - 1, 1), stockCol).SetAutoFilter();
         ws.SheetView.FreezeRows(1);
@@ -311,7 +317,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
         articleHeader.Style.Font.Bold = true;
         articleHeader.Style.Fill.BackgroundColor = XLColor.FromHtml("#EEEEEE");
         articleSheet.Column(1).Style.NumberFormat.Format = "@";
-        articleSheet.Column(8).Style.NumberFormat.Format = "0.##";
+        articleSheet.Column(8).Style.NumberFormat.Format = "0.###";
         articleSheet.SheetView.FreezeRows(1);
         articleSheet.Columns().AdjustToContents(1, Math.Min(ar, 500));
 
@@ -340,7 +346,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                 Category = l.StockItem.Product.SubCategory!.Category!.Name, SubCategory = l.StockItem.Product.SubCategory.Name,
                 l.StockItem.Product.Name, l.StockItem.Colour, l.StockItem.Product.PackSize, l.StockItem.Size, l.StockItem.Product.Unit,
                 l.StockItem.Barcode, l.Cost, SalePrice = l.SalePrice ?? l.StockItem.SalePrice, l.StockItem.Product.MaxDiscountPercent,
-                l.StockItem.ReorderLevel, l.StockItem.IsActive, l.Qty, l.Amount,
+                l.StockItem.ReorderLevel, l.StockItem.IsActive, l.Qty, l.Amount, l.StockItem.Product.StockMode,
             })
             .ToListAsync();
 
@@ -372,6 +378,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
             ws.Cell(r, Col("Reorder level")).Value = l.ReorderLevel;
             ws.Cell(r, Col("Active")).Value = l.IsActive ? "Yes" : "No";
             ws.Cell(r, Col("Opening stock")).Value = l.Qty;
+            ws.Cell(r, Col("Stocked by")).Value = l.StockMode == StockMode.Quantity ? "Quantity" : "Piece";
             ws.Cell(r, amountCol).Value = l.Amount;
             r++;
         }
@@ -383,8 +390,8 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
         ws.Column(Col("Barcode")).Style.NumberFormat.Format = "@";
         ws.Column(Col("Article no")).Style.NumberFormat.Format = "@";
         ws.Range(2, Col("Purchase price"), r, Col("Sale price")).Style.NumberFormat.Format = "#,##0.00";
-        ws.Column(Col("Max discount %")).Style.NumberFormat.Format = "0.##";
-        ws.Column(Col("Opening stock")).Style.NumberFormat.Format = "0.##";
+        ws.Column(Col("Max discount %")).Style.NumberFormat.Format = "0.###";
+        ws.Column(Col("Opening stock")).Style.NumberFormat.Format = "0.###";
         ws.Column(amountCol).Style.NumberFormat.Format = "#,##0.00";
         ws.Range(1, 1, Math.Max(r - 1, 1), amountCol).SetAutoFilter();
         ws.SheetView.FreezeRows(1);
@@ -420,11 +427,34 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
     public async Task<ProductImportPlan> PreviewAsync(Stream input, bool createMissing, bool forPurchase = false)
     {
         currentUser.Demand(forPurchase ? Permissions.PurchasesManage : Permissions.CatalogManage);
-        var (rows, columns, readErrors) = await Task.Run(() => Read(input, forPurchase));
-        var plan = new ProductImportPlan { Rows = rows, CreateMissing = createMissing, Columns = columns, ForPurchase = forPurchase };
+        await using var db = await dbFactory.CreateDbContextAsync();
+
+        // Which rows are quantity items (rice per kg: any qty, never split into pieces): the row's "Stocked by", else the
+        // existing product it names (by Id, barcode, article no. or company + name + pack), else the shop default.
+        var qtyItems = await db.StockItems.AsNoTracking().Where(i => i.Product!.StockMode == StockMode.Quantity)
+            .Select(i => new { i.Id, i.Barcode, i.ArticleNo, Company = i.Product!.Company!.Name, i.Product.Name, i.Product.PackSize })
+            .ToListAsync();
+        var qtyIds = qtyItems.Select(i => i.Id).ToHashSet();
+        var qtyCodes = qtyItems.SelectMany(i => new[] { i.Barcode, i.ArticleNo }).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var qtyNames = qtyItems.Select(i => NameKey(i.Company, i.Name, i.PackSize)).ToHashSet();
+        var pieceNames = (await db.Products.AsNoTracking().Where(p => p.StockMode == StockMode.Piece)
+            .Select(p => new { Company = p.Company!.Name, p.Name, p.PackSize }).ToListAsync())
+            .Select(p => NameKey(p.Company, p.Name, p.PackSize)).ToHashSet();
+        var defaultMode = shop?.DefaultStockMode ?? StockMode.Piece;
+        bool IsQuantity(ProductImportRow r) =>
+            r.Mode is { } mode ? mode == StockMode.Quantity
+            : r.Id is { } id ? qtyIds.Contains(id)
+            : (r.Barcode is not null && qtyCodes.Contains(r.Barcode)) || (r.ArticleNo is not null && qtyCodes.Contains(r.ArticleNo))
+              || qtyNames.Contains(NameKey(r.Company, r.Name, r.PackSize))
+              || (defaultMode == StockMode.Quantity && !pieceNames.Contains(NameKey(r.Company, r.Name, r.PackSize)));
+
+        var (rows, columns, readErrors) = await Task.Run(() => Read(input, forPurchase, IsQuantity));
+        var plan = new ProductImportPlan
+        {
+            Rows = rows, CreateMissing = createMissing, Columns = columns, ForPurchase = forPurchase, DefaultMode = defaultMode,
+        };
         plan.Errors.AddRange(readErrors);
 
-        await using var db = await dbFactory.CreateDbContextAsync();
         await AnalyzeAsync(db, plan);
         return plan;
     }
@@ -441,6 +471,12 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
         await using var db = await dbFactory.CreateDbContextAsync();
         await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
         var (plan, _) = await ApplyAsync(db, preview);
+        // Audit: price / cost changes by the file, one entry per import (the first 25 rows in full).
+        var priced = plan.Lines.Where(l => l.Action == ProductImportAction.Update &&
+                                           (l.Changes.Contains("Price ") || l.Changes.Contains("Cost "))).ToList();
+        if (priced.Count > 0)
+            Audit.Add(db, currentUser, Audit.PriceChanged, $"Excel import, {priced.Count} item(s): " + string.Join("; ", priced.Take(25)
+                .Select(l => $"{l.Source.Barcode ?? l.Source.Name} {string.Join(", ", l.Changes.Split("; ").Where(c => c.StartsWith("Price") || c.StartsWith("Cost")))}")));
         await db.SaveChangesAsync();
         await tx.CommitAsync();
         AppLog.Info($"Product import by \"{currentUser.Session?.UserName}\": {plan.AddCount} added, {plan.UpdateCount} updated, " +
@@ -480,7 +516,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                 StockItemId = x.item!.Id, Qty = x.line.OpeningQty, Cost = x.item.PurchasePrice, SalePrice = x.line.Source.SalePrice,
             })
             .ToList();
-        var id = await PurchaseService.CreateInAsync(db, bill);
+        var id = await PurchaseService.CreateInAsync(db, bill, currentUser);
         await tx.CommitAsync();
         AppLog.Info($"Stock import by \"{currentUser.Session?.UserName}\" as purchase #{id}: {plan.OpeningTotal:0.##} piece(s), " +
                     $"{plan.AddCount} new, {plan.OpeningSkipped.Count} skipped (already in stock)");
@@ -497,6 +533,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
         var plan = new ProductImportPlan
         {
             Rows = preview.Rows, CreateMissing = preview.CreateMissing, Columns = preview.Columns, ForPurchase = preview.ForPurchase,
+            DefaultMode = preview.DefaultMode,
         };
         var (companies, subs, targets) = await AnalyzeAsync(db, plan, tracking: true);
         if (plan.Errors.Count > 0)
@@ -551,6 +588,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
             product.Company = company;
             product.SubCategory = sub;
             ApplyProduct(s, product, plan.Columns);
+            if (product.Id == 0) product.StockMode = s.Mode ?? plan.DefaultMode; // a new product: the row's "Stocked by", else the shop default
 
             var item = target.StockItem;
             if (item is null)
@@ -580,7 +618,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
 
     // ---------------- reading ----------------
 
-    private static (List<ProductImportRow> Rows, IReadOnlySet<string> Columns, List<ProductImportIssue> Errors) Read(Stream input, bool forPurchase)
+    private static (List<ProductImportRow> Rows, IReadOnlySet<string> Columns, List<ProductImportIssue> Errors) Read(Stream input, bool forPurchase, Func<ProductImportRow, bool> isQuantity)
     {
         var rows = new List<ProductImportRow>();
         var errors = new List<ProductImportIssue>();
@@ -630,15 +668,15 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                     var t = v.IsNumber ? v.GetNumber().ToString("0.##########", CultureInfo.InvariantCulture) : row.Cell(c).GetFormattedString();
                     return t.Trim() is { Length: > 0 } s ? s : null;
                 }
-                decimal? Number(string col)
+                decimal? Number(string col, int decimals = 2)
                 {
                     if (!columns.TryGetValue(col, out var c)) return null;
                     var v = row.Cell(c).Value;
                     if (v.IsBlank) return null;
-                    if (v.IsNumber) return Math.Round((decimal)v.GetNumber(), 2);
+                    if (v.IsNumber) return Math.Round((decimal)v.GetNumber(), decimals);
                     var t = row.Cell(c).GetFormattedString().Replace("Rs", "", StringComparison.OrdinalIgnoreCase).Replace(",", "").Trim();
                     if (t.Length == 0) return null;
-                    if (decimal.TryParse(t, NumberStyles.Number, CultureInfo.InvariantCulture, out var d)) return Math.Round(d, 2);
+                    if (decimal.TryParse(t, NumberStyles.Number, CultureInfo.InvariantCulture, out var d)) return Math.Round(d, decimals);
                     rowErrors.Add($"{col} \"{t}\" is not a number");
                     return null;
                 }
@@ -661,6 +699,17 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                     if (value is null) rowErrors.Add($"{col} \"{t}\" is not a number (or none)");
                     else if (value is < 0 or > 100) rowErrors.Add($"{col} must be between 0 and 100");
                     return value;
+                }
+                // "Stocked by": Piece (one barcode per piece) or Quantity (rice per kg); blank = the product's own / the shop default.
+                StockMode? Mode()
+                {
+                    switch (Text("Stocked by")?.ToLowerInvariant())
+                    {
+                        case null: return null;
+                        case "piece" or "pieces" or "pcs" or "pc": return StockMode.Piece;
+                        case "quantity" or "qty" or "loose" or "weight": return StockMode.Quantity;
+                        case var t: rowErrors.Add($"Stocked by must be Piece or Quantity, not \"{t}\""); return null;
+                    }
                 }
                 bool? YesNo(string col)
                 {
@@ -686,7 +735,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                     Text("Company") ?? "", Text("Category") ?? "", Text("Sub-category") ?? "", Text("Product") ?? "",
                     Text("Shade"), Text("Pack size"), Text("Size"), Text("Unit"), Text("Barcode"),
                     Number("Purchase price"), Number("Sale price"), maxDiscount, clearMaxDiscount,
-                    Number("Reorder level"), YesNo("Active"), Number("Opening stock"));
+                    Number("Reorder level", 3), YesNo("Active"), Number("Opening stock", 3), Mode());
 
                 // One row for a whole article: "Blue, Orange" × "40-45" → a product per colour + size.
                 var expanded = Expand(item);
@@ -700,8 +749,15 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                         rowErrors.Add($"{expanded.Count} colour / size combinations; at most {MaxCombinationsPerRow} on one row");
                 }
 
+                // Stock import of a quantity item (rice): the qty as it is (100 kg = one line), never split into pieces.
+                if (forPurchase && isQuantity(item))
+                {
+                    var qty = item.OpeningQty ?? 1;
+                    if (qty <= 0) rowErrors.Add("Qty must be more than 0");
+                    else expanded = expanded.Select(e => e with { OpeningQty = Math.Round(qty, 3) }).ToList();
+                }
                 // Stock import: one barcode per piece, so Qty N (no barcode) = N new pieces of qty 1.
-                if (forPurchase)
+                else if (forPurchase)
                 {
                     var qty = item.OpeningQty ?? 1;
                     if (qty < 1 || qty != Math.Floor(qty))
@@ -869,7 +925,8 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
 
                 // One barcode per piece (owner): a barcode GenZ-POS doesn't know is a new piece, even when its article has
                 // that colour + size already; so is every row without a barcode in a stock import.
-                if (product is not null && s.Barcode is null && !plan.ForPurchase)
+                // A quantity item (rice) has one stock item, bought again and again: always matched.
+                if (product is not null && s.Barcode is null && (!plan.ForPurchase || (s.Mode ?? product.StockMode) == StockMode.Quantity))
                 {
                     // Its stock item of this article (or, without an article no., any article) + colour + size.
                     var same = product.StockItems
@@ -884,6 +941,9 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                     item = same.FirstOrDefault();
                 }
             }
+
+            // Quantity item: the row says so, or its product is one (new products: the shop default).
+            bool IsQty() => (s.Mode ?? product?.StockMode ?? plan.DefaultMode) == StockMode.Quantity;
 
             // Every row of one product must agree on the product columns; an article no. belongs to one product.
             var productId = product is not null ? $"P{product.Id}" : newKey!;
@@ -914,7 +974,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
                 if (seenItems.TryGetValue(item.Id, out var firstRow)) { Error($"Same product as row {firstRow}."); continue; }
                 seenItems[item.Id] = s.Row;
             }
-            else if (!(plan.ForPurchase && s.Barcode is null)) // stock import: each row without a barcode is another piece
+            else if (!(plan.ForPurchase && s.Barcode is null && !IsQty())) // stock import: each piece row without a barcode is another piece
             {
                 // Pieces with different barcodes may share article + colour + size.
                 var key = productId + "\u001f" + StockItemService.Key(s.ArticleNo, s.Shade, useSize ? s.Size : null) + "\u001f" + s.Barcode;
@@ -961,7 +1021,7 @@ public class ProductExcelService(IDbContextFactory<AppDbContext> dbFactory, Curr
 
             // Opening stock (or a stock import's piece) only for a stock item with no stock history yet; otherwise a second
             // import would double it.
-            if (opening > 0 && withStock.Contains(item.Id))
+            if (opening > 0 && withStock.Contains(item.Id) && !(plan.ForPurchase && IsQty()))
             {
                 plan.OpeningSkipped.Add(new ProductImportIssue(s.Row, plan.ForPurchase
                     ? $"{item.ArticleNo} · {item.Barcode} · {item.VariantName}: already in stock or bought before — not bought again."

@@ -37,6 +37,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<AppRole> Roles => Set<AppRole>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
+    public DbSet<ExpenseCategory> ExpenseCategories => Set<ExpenseCategory>();
+    public DbSet<Expense> Expenses => Set<Expense>();
+    public DbSet<CashClosing> CashClosings => Set<CashClosing>();
+    public DbSet<AuditEntry> AuditLog => Set<AuditEntry>();
+    public DbSet<HeldSale> HeldSales => Set<HeldSale>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
     {
@@ -89,6 +94,23 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         b.Entity<PurchaseReturn>().HasIndex(x => x.PurchaseId);
         b.Entity<PurchaseReturn>().HasIndex(x => x.ReturnDate);
 
+        // Quantities have 3 decimals (owner 2026-10-24: 0.125 kg, 50 g = 0.05 kg); money stays (18,2).
+        b.Entity<StockMovement>().Property(x => x.QtyIn).HasPrecision(18, 3);
+        b.Entity<StockMovement>().Property(x => x.QtyOut).HasPrecision(18, 3);
+        b.Entity<SaleLine>().Property(x => x.Qty).HasPrecision(18, 3);
+        b.Entity<PurchaseLine>().Property(x => x.Qty).HasPrecision(18, 3);
+        b.Entity<SaleReturnLine>().Property(x => x.Qty).HasPrecision(18, 3);
+        b.Entity<PurchaseReturnLine>().Property(x => x.Qty).HasPrecision(18, 3);
+        b.Entity<StockItem>().Property(x => x.ReorderLevel).HasPrecision(18, 3);
+        b.Entity<Product>().Property(x => x.PurchaseUnitQty).HasPrecision(18, 3);
+
+        // Expenses, day closing, audit log, held carts (owner 2026-10-24).
+        b.Entity<ExpenseCategory>().HasIndex(x => x.Name).IsUnique();
+        b.Entity<Expense>().HasIndex(x => x.ExpenseDate);
+        b.Entity<CashClosing>().HasIndex(x => x.ClosingDate).IsUnique();
+        b.Entity<AuditEntry>().HasIndex(x => x.At);
+        b.Entity<AuditEntry>().HasIndex(x => x.Action);
+
         b.Entity<AppUser>().HasIndex(x => x.UserName).IsUnique();
         b.Entity<AppRole>().HasIndex(x => x.Name).IsUnique();
         b.Entity<AppRole>().HasMany(x => x.Permissions).WithOne().HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Cascade);
@@ -125,6 +147,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 b.Entity<SubCategory>().HasData(new SubCategory { Id = subId++, CategoryId = catId, Name = sub });
         }
 
+        string[] expenseCategories = ["Rent", "Salaries & wages", "Electricity", "Gas & water", "Tea & food", "Transport",
+            "Repairs & maintenance", "Phone & internet", "Shop supplies", "Other"];
+        for (var i = 0; i < expenseCategories.Length; i++)
+            b.Entity<ExpenseCategory>().HasData(new ExpenseCategory { Id = i + 1, Name = expenseCategories[i] });
+
         // Starting roles; the owner can change Manager / Cashier rights or add roles on the Users & Roles screen.
         // The first admin *user* is created at startup (AuthService.EnsureAdminAsync): a password hash is salted,
         // so it can't be static seed data.
@@ -138,7 +165,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             Permissions.SalesCreate, Permissions.SalesView, Permissions.CustomersManage,
             Permissions.PaymentsReceive, Permissions.StockView,
         ];
-        var manager = Permissions.All.Except([Permissions.SettingsManage, Permissions.UsersManage]);
+        var manager = Permissions.All.Except([Permissions.SettingsManage, Permissions.UsersManage, Permissions.AuditView]);
         b.Entity<RolePermission>().HasData(
             manager.Select(p => new RolePermission { RoleId = AppRole.ManagerId, Permission = p })
                 .Concat(cashier.Select(p => new RolePermission { RoleId = AppRole.CashierId, Permission = p })));

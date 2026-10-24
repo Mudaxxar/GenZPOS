@@ -521,3 +521,19 @@ kbd {
     background: linear-gradient(135deg, #8a5300, var(--rz-warning, #f0a020));
     box-shadow: 0 6px 16px rgba(240, 160, 32, .28);
 }
+
+/* Quantity items (rice per kg): quick qty buttons under the entry strip, across its full width. */
+.till-entry ::deep .quick-qty {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.quick-qty-amount {
+    margin-left: auto;
+    font-size: .85rem;
+    color: var(--rz-text-secondary-color);
+    font-variant-numeric: tabular-nums;
+}

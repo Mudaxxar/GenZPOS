@@ -69,6 +69,44 @@ else
                     <RadzenDropDown TValue="string" OpenOnFocus="true" Name="Unit" @bind-Value="model.Unit" Data="@Units" />
                 </RadzenFormField>
             </RadzenColumn>
+            @* Owner 2026-10-24: piece (one barcode per piece, shoes) or quantity (one barcode, any qty, rice per kg). *@
+            <RadzenColumn Size="12">
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">Stocked by</RadzenText>
+                <RadzenRadioButtonList TValue="StockMode" @bind-Value="model.StockMode" Orientation="Orientation.Horizontal" Disabled="@modeLocked"
+                                       title="@(modeLocked ? "This product already has stock history, so this can't change." : null)">
+                    <Items>
+                        <RadzenRadioButtonListItem Value="StockMode.Piece" Text="Piece — every piece its own barcode" />
+                        <RadzenRadioButtonListItem Value="StockMode.Quantity" Text="Quantity — one barcode, any qty (kg, ltr…)" />
+                    </Items>
+                </RadzenRadioButtonList>
+            </RadzenColumn>
+            @if (model.StockMode == StockMode.Quantity)
+            {
+                <RadzenColumn Size="6" SizeMD="3">
+                    <RadzenFormField Text="Bought in (optional)" Style="width:100%">
+                        <RadzenAutoComplete Name="PurchaseUnit" @bind-Value="model.PurchaseUnit" Data="@Fmt.PurchaseUnits" OpenOnFocus="true" MaxLength="20"
+                                            Placeholder="Bag, Carton…" />
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="6" SizeMD="3">
+                    <RadzenFormField Text="@($"{model.Unit} in one {(string.IsNullOrWhiteSpace(model.PurchaseUnit) ? "…" : model.PurchaseUnit)}")" Style="width:100%">
+                        <RadzenNumeric TValue="decimal?" Name="PurchaseUnitQty" @bind-Value="model.PurchaseUnitQty" Min="0" ShowUpDown="false" Format="0.###"
+                                       Disabled="@string.IsNullOrWhiteSpace(model.PurchaseUnit)" Placeholder="e.g. 50" />
+                    </RadzenFormField>
+                </RadzenColumn>
+                <RadzenColumn Size="12" SizeMD="6" class="rz-display-flex rz-align-items-center">
+                    <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                        @if (model.HasPurchaseUnit)
+                        {
+                            <span>Buy in @model.PurchaseUnit (1 = @Qty(model.PurchaseUnitQty!.Value) @model.Unit), stock and sell in @model.Unit: 1, ½, ¼ …</span>
+                        }
+                        else
+                        {
+                            <span>Bought and sold in @model.Unit, any quantity (0.5, 0.25 …).</span>
+                        }
+                    </RadzenText>
+                </RadzenColumn>
+            }
             <RadzenColumn Size="12">
                 <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
                     <RadzenSwitch Name="IsActive" @bind-Value="model.IsActive" />
@@ -83,18 +121,18 @@ else
             <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-4 rz-mb-2" Style="color:var(--rz-primary)">PRICING &amp; STOCK</RadzenText>
             <RadzenRow Gap="1rem">
                 <RadzenColumn Size="6" SizeMD="3">
-                    <RadzenFormField Text="Purchase price (Rs)" Style="width:100%">
+                    <RadzenFormField Text="@(model.StockMode == StockMode.Quantity ? $"Purchase price (Rs / {model.Unit})" : "Purchase price (Rs)")" Style="width:100%">
                         <RadzenNumeric TValue="decimal" Name="PurchasePrice" @bind-Value="newCost" Min="0" ShowUpDown="false" Format="N2" />
                     </RadzenFormField>
                 </RadzenColumn>
                 <RadzenColumn Size="6" SizeMD="3">
-                    <RadzenFormField Text="Sale price (Rs)" Style="width:100%">
+                    <RadzenFormField Text="@(model.StockMode == StockMode.Quantity ? $"Sale price (Rs / {model.Unit})" : "Sale price (Rs)")" Style="width:100%">
                         <RadzenNumeric TValue="decimal" Name="SalePrice" @bind-Value="newPrice" Min="0" ShowUpDown="false" Format="N2" />
                     </RadzenFormField>
                 </RadzenColumn>
                 <RadzenColumn Size="6" SizeMD="3">
                     <RadzenFormField Text="Low-stock alert at" Style="width:100%">
-                        <RadzenNumeric TValue="decimal" Name="ReorderLevel" @bind-Value="newReorder" Min="0" ShowUpDown="false" />
+                        <RadzenNumeric TValue="decimal" Name="ReorderLevel" @bind-Value="newReorder" Min="0" ShowUpDown="false" Format="0.###" />
                     </RadzenFormField>
                 </RadzenColumn>
                 <RadzenColumn Size="6" SizeMD="3" class="rz-display-flex rz-align-items-center">
@@ -127,7 +165,7 @@ else
                 </RadzenColumn>
                 <RadzenColumn Size="6" SizeMD="3">
                     <RadzenFormField Text="Opening stock (already in shop)" Style="width:100%">
-                        <RadzenNumeric TValue="decimal" Name="OpeningQty" @bind-Value="openingQty" Min="0" ShowUpDown="false" />
+                        <RadzenNumeric TValue="decimal" Name="OpeningQty" @bind-Value="openingQty" Min="0" ShowUpDown="false" Format="0.###" />
                     </RadzenFormField>
                 </RadzenColumn>
             </RadzenRow>
@@ -149,6 +187,10 @@ else
     [Parameter] public int ProductId { get; set; }
 
     [Inject] private StockItemService Variants { get; set; } = default!;
+    [Inject] private ShopInfo Shop { get; set; } = default!;
+
+    /// <summary>Stocked-by can't change once the product has stock history (its pieces / qty would no longer add up).</summary>
+    private bool modeLocked;
 
     private Product? model;
     private int? companyId, categoryId, subCategoryId;
@@ -173,7 +215,7 @@ else
             Product loaded;
             if (ProductId == 0)
             {
-                loaded = new Product();
+                loaded = new Product { StockMode = Shop.DefaultStockMode };
                 barcode = autoBarcode = await ProductCodes.NextBarcodeAsync(db);
             }
             else
@@ -182,6 +224,7 @@ else
                     ?? throw new BusinessException("This product no longer exists.");
                 companyId = loaded.CompanyId;
                 subCategoryId = loaded.SubCategoryId;
+                modeLocked = await db.StockMovements.AnyAsync(m => m.StockItem!.ProductId == loaded.Id);
             }
 
             await LoadListsAsync(db);
@@ -269,6 +312,7 @@ else
             Id = model.Id, CompanyId = companyId.Value, SubCategoryId = subCategoryId.Value, Name = model.Name,
             PackSize = model.PackSize, Unit = model.Unit,
             MaxDiscountPercent = model.MaxDiscountPercent, IsActive = model.IsActive,
+            StockMode = model.StockMode, PurchaseUnit = model.PurchaseUnit, PurchaseUnitQty = model.PurchaseUnitQty,
         };
         List<StockItemToCreate> toCreate = model.Id == 0 ? [new StockItemToCreate(null, null, openingQty, Clean(barcode))] : [];
 
@@ -281,7 +325,7 @@ else
         if (addAnother)
         {
             // Keep company / category / unit so a range of products of one brand is quick to enter.
-            model = new Product { Unit = model.Unit };
+            model = new Product { Unit = model.Unit, StockMode = model.StockMode, PurchaseUnit = model.PurchaseUnit, PurchaseUnitQty = model.PurchaseUnitQty };
             newCost = newPrice = newReorder = openingQty = 0;
             barcodeLocked = true;
             autoBarcode = null;

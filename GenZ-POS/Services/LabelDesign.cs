@@ -122,7 +122,7 @@ public sealed class LabelDesign
             LabelField.Size => label.Size,
             LabelField.ColourSize => string.Join("  ·  ", new[] { label.Colour, label.Size is { Length: > 0 } s ? $"Size {s}" : null }
                 .Where(s => !string.IsNullOrWhiteSpace(s))),
-            LabelField.Price => LabelPrinter.PriceText(label.Price),
+            LabelField.Price => LabelPrinter.PriceText(label.Price) + (label.PriceUnit is { Length: > 0 } u ? $" / {u}" : ""),
             LabelField.BarcodeText => label.Barcode,
             LabelField.Text => e.Text,
             _ => null,

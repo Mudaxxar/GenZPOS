@@ -1,0 +1,179 @@
+@page "/expenses"
+@attribute [Authorize(Policy = Permissions.ExpensesManage)]
+@inherits PageBase
+@inject ExpenseService ExpenseSvc
+
+@* Shop expenses (owner 2026-10-24): rent, salaries, electricity, tea … Cash ones come out of the drawer (Day Book, day
+   closing); all come off the profit (Sales & Profit: net profit). Enter: Date → Category → Amount → Method → Paid to →
+   Notes → Save → back to Category. *@
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Expenses</RadzenText>
+
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeMD="4">
+        <RadzenCard>
+            <RadzenTemplateForm TItem="Expense" Data="@model" Submit="SaveAsync">
+                <RadzenStack Gap="1rem">
+                    <DateBox Label="Date" Name="ExpenseDate" @bind-Value="model.ExpenseDate" Style="width:100%" />
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenFormField Text="Spent on *" Style="flex:1">
+                            <RadzenDropDown TValue="int" OpenOnFocus="true" Name="CategoryId" @bind-Value="model.CategoryId"
+                                            Data="@categories" TextProperty="Name" ValueProperty="Id" AllowFiltering="true"
+                                            FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="Rent, salaries, electricity…"
+                                            data-enter-first="true" />
+                        </RadzenFormField>
+                        <RadzenButton Icon="add" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined" title="Add a category" Click="AddCategoryAsync" />
+                    </RadzenStack>
+                    <RadzenDataAnnotationValidator Component="CategoryId" />
+                    <RadzenFormField Text="Amount *" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" Name="Amount" @bind-Value="model.Amount" Min="0" ShowUpDown="false" Format="N2" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Paid by" Style="width:100%">
+                        <RadzenDropDown TValue="PaymentMethod" OpenOnFocus="true" Name="Method" @bind-Value="model.Method" Data="@(Enum.GetValues<PaymentMethod>())" />
+                    </RadzenFormField>
+                    @if (model.Method == PaymentMethod.Cash)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="margin-top:-0.5rem">Cash: taken out of the drawer (counts in the day closing).</RadzenText>
+                    }
+                    <RadzenFormField Text="Paid to" Style="width:100%">
+                        <RadzenTextBox Name="PaidTo" @bind-Value="model.PaidTo" MaxLength="120" Placeholder="Landlord, staff name, WAPDA…" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Notes" Style="width:100%">
+                        <RadzenTextBox Name="Notes" @bind-Value="model.Notes" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Save expense" Icon="save" IsBusy="Busy" />
+                </RadzenStack>
+            </RadzenTemplateForm>
+        </RadzenCard>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeMD="8">
+        <RadzenCard>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+                <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" />
+                <RadzenFormField Text="Spent on" Style="width:200px">
+                    <RadzenDropDown TValue="int?" @bind-Value="filterCategoryId" @bind-Value:after="ReloadAsync" Data="@categories" TextProperty="Name" ValueProperty="Id"
+                                    AllowClear="true" Placeholder="All" />
+                </RadzenFormField>
+            </RadzenStack>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="1.5rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+                <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Total: <strong>@Money(sum)</strong></RadzenText>
+                <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">From the drawer (cash): <strong>@Money(sumCash)</strong></RadzenText>
+                @foreach (var (name, amount) in byCategory.Take(5))
+                {
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" Style="opacity:.75">@name @Money(amount)</RadzenText>
+                }
+            </RadzenStack>
+
+            <RadzenDataGrid @ref="grid" TItem="Expense" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                            AllowPaging="true" PageSize="15" ShowPagingSummary="true" Density="Density.Compact" EmptyText="No expenses in this period.">
+                <Columns>
+                    <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.ExpenseDate)</Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Spent on" Width="170px"><Template><strong>@context.Category?.Name</strong></Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Paid to / notes">
+                        <Template>
+                            <div>@context.PaidTo</div>
+                            @if (!string.IsNullOrEmpty(context.Notes)) { <div style="font-size:.8rem; opacity:.7">@context.Notes</div> }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn Property="Method" Title="By" Width="85px" />
+                    <RadzenDataGridColumn Title="Entered by" Width="110px"><Template><span style="opacity:.7">@context.CreatedBy</span></Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Title="Amount" Width="125px" TextAlign="TextAlign.Right"><Template><strong>@Money(context.Amount)</strong></Template></RadzenDataGridColumn>
+                    <RadzenDataGridColumn Width="60px" TextAlign="TextAlign.Right">
+                        <Template>
+                            <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete"
+                                          Click="@(() => DeleteAsync(context))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+
+@code {
+    private Expense model = new();
+    private List<ExpenseCategory> categories = [];
+
+    private RadzenDataGrid<Expense> grid = default!;
+    private List<Expense>? rows; // null until first load → Radzen calls LoadData right after first render
+    private int count, loadVersion;
+    private bool loading = true;
+    private decimal sum, sumCash;
+    private List<(string Name, decimal Amount)> byCategory = [];
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1), to = DateTime.Today;
+    private int? filterCategoryId;
+
+    protected override async Task OnInitializedAsync() => await LoadCategoriesAsync();
+
+    private async Task LoadCategoriesAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        categories = await db.ExpenseCategories.AsNoTracking().Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion;
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var end = to.Date.AddDays(1);
+            var q = db.Expenses.AsNoTracking().Where(e => e.ExpenseDate >= from.Date && e.ExpenseDate < end);
+            if (filterCategoryId is int c) q = q.Where(e => e.CategoryId == c);
+            var totals = await q.GroupBy(e => e.Category!.Name)
+                .Select(g => new { g.Key, Amount = g.Sum(e => e.Amount), Cash = g.Sum(e => e.Method == PaymentMethod.Cash ? e.Amount : 0), Count = g.Count() })
+                .ToListAsync();
+            var page = await q.Include(e => e.Category).OrderByDescending(e => e.ExpenseDate).ThenByDescending(e => e.Id)
+                .Skip(args.Skip ?? 0).Take(args.Top ?? 15).ToListAsync();
+            if (version != loadVersion) return;
+            count = totals.Sum(t => t.Count);
+            sum = totals.Sum(t => t.Amount);
+            sumCash = totals.Sum(t => t.Cash);
+            byCategory = totals.OrderByDescending(t => t.Amount).Select(t => (t.Key, t.Amount)).ToList();
+            rows = page;
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private async Task SaveAsync()
+    {
+        var name = categories.FirstOrDefault(c => c.Id == model.CategoryId)?.Name;
+        if (await RunAsync(() => ExpenseSvc.AddAsync(model), $"Expense saved: {name} {Money(model.Amount)}"))
+        {
+            // Keep the date (several bills of one day); clear the rest.
+            model = new Expense { ExpenseDate = model.ExpenseDate };
+            await grid.Reload();
+        }
+    }
+
+    private async Task AddCategoryAsync()
+    {
+        var name = await Dialogs.OpenAsync<NamePromptDialog>("Add expense category",
+            new Dictionary<string, object?> { [nameof(NamePromptDialog.Label)] = "What was it spent on?" }, new DialogOptions { Width = "420px" });
+        if (name is not string { Length: > 0 } n) return;
+        var id = 0;
+        if (await RunAsync(async () => id = await ExpenseSvc.AddCategoryAsync(n), $"Category \"{n}\" added"))
+        {
+            await LoadCategoriesAsync();
+            model.CategoryId = id;
+        }
+    }
+
+    private async Task DeleteAsync(Expense e)
+    {
+        if (!await ConfirmAsync($"Delete the expense {e.Category?.Name} {Money(e.Amount)} of {Date(e.ExpenseDate)}?")) return;
+        if (await RunAsync(() => ExpenseSvc.DeleteAsync(e.Id), "Expense deleted"))
+            await grid.Reload();
+    }
+}

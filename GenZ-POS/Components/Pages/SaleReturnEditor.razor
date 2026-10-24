@@ -78,7 +78,7 @@ else
                         <RadzenDataGridColumn Title="Can return" Width="90px" TextAlign="TextAlign.Right"><Template>@Qty(context.Returnable)</Template></RadzenDataGridColumn>
                         <RadzenDataGridColumn Title="Return qty" Width="110px">
                             <Template>
-                                <RadzenNumeric TValue="decimal" @bind-Value="context.ReturnQty" Min="0" Max="@context.Returnable" ShowUpDown="false"
+                                <RadzenNumeric TValue="decimal" @bind-Value="context.ReturnQty" Min="0" Max="@context.Returnable" ShowUpDown="false" Format="0.###"
                                                Disabled="@(context.Returnable <= 0)" Style="width:100%"
                                                data-enter-first="@(context == FirstReturnable ? "true" : null)" />
                             </Template>

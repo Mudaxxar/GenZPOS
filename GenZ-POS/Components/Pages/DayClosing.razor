@@ -1,0 +1,286 @@
+@page "/day-closing"
+@attribute [Authorize(Policy = Permissions.DayClosing)]
+@inherits PageBase
+@inject DayClosingService Closings
+@inject AppConfig Config
+@inject ShopInfo Shop
+
+@* Day closing / Z-report (owner 2026-10-24): what should be in the drawer (opening + cash in − cash out, from the Day
+   Book) against what is counted; short / over; money taken out; the rest is tomorrow's opening. Print = the receipt
+   printer (GDI, ZReportPrinter). Enter: Counted → Taken out → Notes → Close the day. *@
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.5rem">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-m-0">Day Closing</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+        <DateBox Label="Day" @bind-Value="date" @bind-Value:after="LoadAsync" Style="width:160px" />
+        <RadzenDropDown TValue="string" Data="@printers" @bind-Value="printer" @bind-Value:after="PrinterChanged"
+                        Placeholder="Receipt printer" Style="width:200px" title="This PC's receipt printer (remembered)" />
+        <RadzenButton Text="Print Z-report" Icon="print" ButtonStyle="ButtonStyle.Light" IsBusy="@printing" Disabled="@(z is null || printer is null)" Click="PrintAsync" />
+    </RadzenStack>
+</RadzenStack>
+
+@if (z is null)
+{
+    <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Style="height:4px" class="rz-mt-2" />
+}
+else
+{
+    <RadzenRow Gap="1rem" class="rz-mt-2">
+        @* ---------- The drawer ---------- *@
+        <RadzenColumn Size="12" SizeLG="5">
+            <RadzenCard>
+                @if (z.Closing is { } done)
+                {
+                    <RadzenAlert AlertStyle="AlertStyle.Success" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small" class="rz-mb-2">
+                        Closed by @done.ClosedBy at @done.ClosedAt.ToString("HH:mm"): counted @Money(done.Counted),
+                        @(done.Difference == 0 ? "no difference" : done.Difference < 0 ? $"short {Money(-done.Difference)}" : $"over {Money(done.Difference)}").
+                        Closing again replaces it.
+                    </RadzenAlert>
+                    @if (z.ChangedSinceClosing)
+                    {
+                        @* E.g. an invoice of that day was deleted after closing: the saved count no longer fits. *@
+                        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" Size="AlertSize.Small" class="rz-mb-2"
+                                     Title="Entries of this day changed after it was closed">
+                            At closing: cash in @Money(done.CashIn), out @Money(done.CashOut), expected @Money(done.Expected).
+                            Now: in @Money(z.Book.CashIn), out @Money(z.Book.CashOut). See the Audit log for what changed; count again and close again.
+                        </RadzenAlert>
+                    }
+                }
+                <RadzenStack Gap="0.6rem" data-enter-group="true">
+                    @if (z.OpeningFrom is { } prev)
+                    {
+                        <TotalLine Label="@($"Opening cash (left on {Date(prev)})")" Value="@Money(z.Opening)" />
+                    }
+                    else
+                    {
+                        @* No earlier closing: the cash that was in the drawer this morning is typed once. *@
+                        <RadzenFormField Text="Opening cash (in the drawer this morning)" Style="width:100%">
+                            <RadzenNumeric TValue="decimal" @bind-Value="opening" Min="0" ShowUpDown="false" Format="N2" />
+                        </RadzenFormField>
+                    }
+                    <TotalLine Label="+ Cash in" Value="@Money(z.Book.CashIn)" />
+                    <TotalLine Label="− Cash out" Value="@Money(z.Book.CashOut)" />
+                    <div class="dc-expected">
+                        <span>Should be in the drawer</span>
+                        <strong>@Money(Expected)</strong>
+                    </div>
+
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                        <RadzenFormField Text="Cash counted *" Style="flex:1">
+                            <RadzenNumeric TValue="decimal?" @bind-Value="counted" Min="0" ShowUpDown="false" Format="N2" data-enter-first="true" />
+                        </RadzenFormField>
+                        <RadzenButton Text="@(showNotes ? "Hide notes" : "Count notes")" Icon="payments" ButtonStyle="ButtonStyle.Light" tabindex="-1"
+                                      Click="@(() => showNotes = !showNotes)" />
+                    </RadzenStack>
+                    @if (showNotes)
+                    {
+                        @* Note counter: pieces of each note / coin → the counted total. *@
+                        <div class="dc-notes">
+                            @foreach (var d in Denominations)
+                            {
+                                <RadzenFormField Text="@($"Rs {d:N0} ×")">
+                                    <RadzenNumeric TValue="int" Value="@notes.GetValueOrDefault(d)" ValueChanged="@((int v) => SetNotes(d, v))" Min="0" ShowUpDown="false" tabindex="-1" />
+                                </RadzenFormField>
+                            }
+                            <RadzenFormField Text="Coins (Rs)">
+                                <RadzenNumeric TValue="decimal" Value="@coins" ValueChanged="@((decimal v) => { coins = v; counted = NotesTotal; })" Min="0" ShowUpDown="false" tabindex="-1" />
+                            </RadzenFormField>
+                        </div>
+                    }
+                    @if (counted is decimal c)
+                    {
+                        var diff = c - Expected;
+                        <div class="@(diff < 0 ? "dc-diff short" : diff > 0 ? "dc-diff over" : "dc-diff ok")">
+                            <span>@(diff < 0 ? "Short" : diff > 0 ? "Over" : "Matches")</span>
+                            <strong>@Money(Math.Abs(diff))</strong>
+                        </div>
+                    }
+                    <RadzenFormField Text="Taken out now (to owner / bank)" Style="width:100%">
+                        <RadzenNumeric TValue="decimal" @bind-Value="takenOut" Min="0" ShowUpDown="false" Format="N2" />
+                    </RadzenFormField>
+                    @if (counted is decimal cc)
+                    {
+                        <TotalLine Label="Left in the drawer for tomorrow" Value="@Money(cc - takenOut)" Strong="true" Danger="@(cc - takenOut < 0)" />
+                    }
+                    <RadzenFormField Text="Notes (why short / over …)" Style="width:100%">
+                        <RadzenTextBox @bind-Value="closingNotes" MaxLength="250" />
+                    </RadzenFormField>
+                    <RadzenButton Text="@(z.Closing is null ? "Close the day  (F9)" : "Close again  (F9)")" Icon="lock_clock" Size="ButtonSize.Large"
+                                  IsBusy="Busy" Disabled="@(counted is null)" Click="CloseAsync" data-enter-submit="true" data-hotkey="F9" />
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+
+        @* ---------- What happened today ---------- *@
+        <RadzenColumn Size="12" SizeLG="7">
+            <RadzenCard class="rz-mb-3">
+                <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">@z.Date.ToString("dddd dd-MMM-yyyy")</RadzenText>
+                <RadzenRow Gap="1rem">
+                    <RadzenColumn Size="12" SizeMD="6">
+                        <RadzenStack Gap="0.35rem">
+                            <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0">Sales</RadzenText>
+                            <TotalLine Label="Invoices" Value="@z.Book.Totals.Invoices.ToString()" />
+                            <TotalLine Label="Sales total" Value="@Money(z.Book.Totals.Sales)" />
+                            @if (z.InvoiceDiscounts > 0) { <TotalLine Label="Discounts given" Value="@Money(z.InvoiceDiscounts)" /> }
+                            @if (z.Book.Totals.CreditSales > 0) { <TotalLine Label="On credit" Value="@Money(z.Book.Totals.CreditSales)" /> }
+                            @if (z.Book.Totals.SaleReturns > 0) { <TotalLine Label="Sales returns" Value="@("− " + Money(z.Book.Totals.SaleReturns))" /> }
+                            <TotalLine Label="Net sales" Value="@Money(z.Book.Totals.Sales - z.Book.Totals.SaleReturns)" Strong="true" />
+                        </RadzenStack>
+                    </RadzenColumn>
+                    <RadzenColumn Size="12" SizeMD="6">
+                        <RadzenStack Gap="0.35rem">
+                            <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0">Expenses</RadzenText>
+                            @foreach (var (category, amount, cash) in z.Expenses)
+                            {
+                                <TotalLine Label="@(category + (cash == amount ? "" : " (part bank)"))" Value="@Money(amount)" />
+                            }
+                            @if (z.Expenses.Count == 0)
+                            {
+                                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" Style="opacity:.6">None</RadzenText>
+                            }
+                            else
+                            {
+                                <TotalLine Label="Total expenses" Value="@Money(z.Expenses.Sum(e => e.Amount))" Strong="true" />
+                            }
+                            @if (z.Book.NonCashIn > 0 || z.Book.NonCashOut > 0)
+                            {
+                                <RadzenText TextStyle="TextStyle.Overline" class="rz-m-0 rz-mt-2">Bank / cheque (not in the drawer)</RadzenText>
+                                @if (z.Book.NonCashIn > 0) { <TotalLine Label="Received" Value="@Money(z.Book.NonCashIn)" /> }
+                                @if (z.Book.NonCashOut > 0) { <TotalLine Label="Paid" Value="@Money(z.Book.NonCashOut)" /> }
+                            }
+                        </RadzenStack>
+                    </RadzenColumn>
+                </RadzenRow>
+            </RadzenCard>
+
+            <RadzenCard>
+                <RadzenText TextStyle="TextStyle.Overline" class="rz-mb-1">Cash in and out of the drawer</RadzenText>
+                <RadzenDataGrid TItem="CashLine" Data="@cashLines" Density="Density.Compact" EmptyText="No cash moved on this day.">
+                    <Columns>
+                        <RadzenDataGridColumn Title="What" Property="Type" />
+                        <RadzenDataGridColumn Title="In" Width="130px" TextAlign="TextAlign.Right"><Template>@(context.In == 0 ? "" : Money(context.In))</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn Title="Out" Width="130px" TextAlign="TextAlign.Right"><Template>@(context.Out == 0 ? "" : Money(context.Out))</Template></RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+                <RadzenLink Path="@($"reports/daybook")" Text="Every entry: Day Book →" class="rz-mt-2" Style="display:inline-block" />
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+
+    @* ---------- Recent closings ---------- *@
+    <RadzenCard class="rz-mt-3">
+        <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Recent closings</RadzenText>
+        <RadzenDataGrid TItem="CashClosing" Data="@history" Density="Density.Compact" EmptyText="No day closed yet."
+                        RowClick="@(async a => { date = a.Data!.ClosingDate; await LoadAsync(); })" Style="cursor:pointer">
+            <Columns>
+                <RadzenDataGridColumn Title="Day" Width="130px"><Template>@Date(context.ClosingDate)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Expected" TextAlign="TextAlign.Right"><Template>@Money(context.Expected)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Counted" TextAlign="TextAlign.Right"><Template>@Money(context.Counted)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Short / over" TextAlign="TextAlign.Right">
+                    <Template>
+                        <strong style="@(context.Difference < 0 ? "color:var(--rz-danger)" : context.Difference > 0 ? "color:var(--rz-success)" : null)">
+                            @(context.Difference == 0 ? "—" : (context.Difference < 0 ? "short " : "over ") + Money(Math.Abs(context.Difference)))
+                        </strong>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Taken out" TextAlign="TextAlign.Right"><Template>@Money(context.TakenOut)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Left" TextAlign="TextAlign.Right"><Template>@Money(context.LeftInDrawer)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="By" Width="140px"><Template>@context.ClosedBy @context.ClosedAt.ToString("HH:mm")</Template></RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenCard>
+}
+
+@code {
+    private sealed record CashLine(string Type, decimal In, decimal Out);
+
+    private static readonly int[] Denominations = [5000, 1000, 500, 100, 50, 20, 10];
+
+    private DateTime date = DateTime.Today;
+    private ZReport? z;
+    private List<CashLine> cashLines = [];
+    private List<CashClosing> history = [];
+    private decimal opening, takenOut, coins;
+    private decimal? counted;
+    private string? closingNotes;
+    private bool showNotes, printing;
+    private readonly Dictionary<int, int> notes = [];
+
+    private IReadOnlyList<string> printers = [];
+    private string? printer;
+
+    /// <summary>Opening typed (first closing ever) or carried from the last closing.</summary>
+    private decimal Expected => (z?.OpeningFrom is null ? opening : z.Opening) + (z?.Book.CashIn ?? 0) - (z?.Book.CashOut ?? 0);
+
+    private decimal NotesTotal => notes.Sum(n => (decimal)n.Key * n.Value) + coins;
+
+    private void SetNotes(int denomination, int pieces)
+    {
+        notes[denomination] = pieces;
+        counted = NotesTotal;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        printers = await Task.Run(ReceiptPrinter.InstalledPrinters);
+        printer = Config.ReceiptPrinter is { } p && printers.Contains(p) ? p : ReceiptPrinter.DefaultPrinter();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        z = null;
+        await RunAsync(async () =>
+        {
+            var report = await Closings.GetZReportAsync(date);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            history = await db.CashClosings.AsNoTracking().OrderByDescending(c => c.ClosingDate).Take(30).ToListAsync();
+            z = report;
+            cashLines = report.CashByType.Select(r => new CashLine(r.Type, r.In, r.Out)).ToList();
+            opening = report.Opening;
+            // A closed day shows what was entered; an open one starts empty (count first).
+            counted = report.Closing?.Counted;
+            takenOut = report.Closing?.TakenOut ?? 0;
+            closingNotes = report.Closing?.Notes;
+            notes.Clear();
+            coins = 0;
+        });
+    }
+
+    private async Task CloseAsync()
+    {
+        if (counted is not decimal c || z is null) return;
+        var diff = c - Expected;
+        if (diff != 0 && !await ConfirmAsync($"The drawer is {(diff < 0 ? "SHORT" : "OVER")} by {Money(Math.Abs(diff))}. Close the day anyway?"))
+            return;
+        if (await RunAsync(() => Closings.CloseAsync(date, opening, c, takenOut, closingNotes),
+                $"{Date(date)} closed: {(diff == 0 ? "cash matches" : diff < 0 ? $"short {Money(-diff)}" : $"over {Money(diff)}")}"))
+        {
+            await LoadAsync();
+            if (printer is not null && await ConfirmAsync("Print the Z-report now?"))
+                await PrintAsync();
+        }
+    }
+
+    private void PrinterChanged()
+    {
+        Config.ReceiptPrinter = printer;
+        Config.Save();
+    }
+
+    private async Task PrintAsync()
+    {
+        if (z is null) return;
+        printing = true;
+        try
+        {
+            var (report, p, by, width) = (z, printer, CurrentUser.Session?.UserName, Shop.PrintFormat == PrintFormat.Receipt58 ? 58 : 80);
+            var problem = await Task.Run(() => ZReportPrinter.Print(report, Shop, p, width, by));
+            if (problem is null) Toast(NotificationSeverity.Success, "Z-report sent to the printer");
+            else Toast(NotificationSeverity.Error, problem, 6000);
+        }
+        finally
+        {
+            printing = false;
+        }
+    }
+}

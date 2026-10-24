@@ -1,0 +1,44 @@
+/* Big "should be in the drawer" line and the short / over box. */
+.dc-expected {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--rz-base-100, #f4f5f7);
+    font-size: 1rem;
+}
+
+.dc-expected strong {
+    font-size: 1.4rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.dc-diff {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+.dc-diff strong {
+    font-size: 1.25rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.dc-diff.short { background: var(--rz-danger-lighter, #fdecea); color: var(--rz-danger-darker, #a31515); }
+.dc-diff.over { background: var(--rz-warning-lighter, #fff4e5); color: var(--rz-warning-darker, #8a5300); }
+.dc-diff.ok { background: var(--rz-success-lighter, #e6f4ea); color: var(--rz-success-darker, #1e6b34); }
+
+/* Note counter: 2–4 per row depending on the space. */
+.dc-notes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px;
+}
+
+.dc-notes ::deep .rz-form-field {
+    width: 100%;
+}

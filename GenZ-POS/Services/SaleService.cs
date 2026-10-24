@@ -15,7 +15,7 @@ public class SaleService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser 
         currentUser.Demand(Permissions.SalesCreate);
         await using var db = await dbFactory.CreateDbContextAsync();
         await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
-        var id = await CreateInAsync(db, sale);
+        var id = await CreateInAsync(db, sale, currentUser);
         await tx.CommitAsync();
         return id;
     }
@@ -72,7 +72,7 @@ public class SaleService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser 
                 : $"Walk-in customer has no account: give back the whole difference in cash ({returned - newTotal:N2}).");
 
         sale.Paid = setOff + Math.Max(cashNow, 0);
-        var saleId = await CreateInAsync(db, sale);
+        var saleId = await CreateInAsync(db, sale, currentUser);
 
         decimal setOffLeft = setOff, cashBackLeft = Math.Max(-cashNow, 0);
         foreach (var ret in prepared)
@@ -97,7 +97,7 @@ public class SaleService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser 
     /// Validates and saves an invoice with its stock movements on <paramref name="db"/>, inside the caller's
     /// Serializable transaction (the caller checks rights and commits).
     /// </summary>
-    internal static async Task<int> CreateInAsync(AppDbContext db, Sale sale)
+    internal static async Task<int> CreateInAsync(AppDbContext db, Sale sale, CurrentUser user)
     {
         if (sale.CustomerId <= 0)
             throw new BusinessException("Select a customer.");
@@ -190,6 +190,18 @@ public class SaleService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser 
             });
         }
 
+        // Audit: a big discount = rate cuts + invoice discount ≥ Audit.BigDiscountPercent of the list price.
+        var listValue = lines.Sum(l => Math.Round(l.Qty * products[l.StockItemId].SalePrice, 2));
+        if (listValue > 0 && listValue - sale.Total >= listValue * Audit.BigDiscountPercent / 100)
+        {
+            var below = lines.Where(l => l.Rate < products[l.StockItemId].SalePrice)
+                .Select(l => $"{products[l.StockItemId].Name} {l.Rate:N2} (price {products[l.StockItemId].SalePrice:N2})").ToList();
+            Audit.Add(db, user, Audit.BigDiscount,
+                $"Invoice #{sale.Id}: list {listValue:N2} → total {sale.Total:N2} ({(listValue - sale.Total) / listValue:P0} off)" +
+                (sale.Discount > 0 ? $"; invoice discount {sale.Discount:N2}" : "") +
+                (below.Count > 0 ? "; below price: " + string.Join(", ", below) : ""), sale.Id);
+        }
+
         await db.SaveChangesAsync();
         return sale.Id;
     }
@@ -254,12 +266,16 @@ public class SaleService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser 
         if (exchange.Count > 0)
             throw new BusinessException(
                 $"Invoice #{saleId} was an exchange together with return # {string.Join(", ", exchange)}. Delete that return first.");
+        var info = await db.Sales.Where(s => s.Id == saleId)
+            .Select(s => new { s.SaleDate, Customer = s.Customer!.Name, s.Total, s.Paid, Items = s.Lines.Count }).FirstOrDefaultAsync()
+            ?? throw new BusinessException("Invoice not found. It may already have been deleted.");
         await db.StockMovements
             .Where(m => m.Type == StockMovementType.Sale && m.RefId == saleId)
             .ExecuteDeleteAsync();
-        var deleted = await db.Sales.Where(s => s.Id == saleId).ExecuteDeleteAsync();
-        if (deleted == 0)
-            throw new BusinessException("Invoice not found. It may already have been deleted.");
+        await db.Sales.Where(s => s.Id == saleId).ExecuteDeleteAsync();
+        Audit.Add(db, currentUser, Audit.SaleDeleted,
+            $"Invoice #{saleId} of {info.SaleDate:dd-MMM-yyyy}, {info.Customer}: {info.Items} item(s), total {info.Total:N2}, paid {info.Paid:N2}", saleId);
+        await db.SaveChangesAsync();
         await tx.CommitAsync();
     }
 }

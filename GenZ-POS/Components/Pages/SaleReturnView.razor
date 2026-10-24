@@ -93,7 +93,7 @@ else
                             <div>@string.Join(" · ", new[] { l.StockItem?.ArticleNo, l.StockItem?.Barcode, l.StockItem?.Colour, l.StockItem?.Size is { Length: > 0 } sz ? $"Size {sz}" : null }.Where(s => !string.IsNullOrWhiteSpace(s)))</div>
                             <div class="invoice-muted" style="font-size:.85em">@l.StockItem?.Product?.Name</div>
                         </td>
-                        <td class="money">@Qty(l.Qty)</td>
+                        <td class="money">@Fmt.QtyUnit(l.Qty, l.StockItem?.Product?.Unit)</td>
                         <td class="money">
                             @Money(l.Rate)
                             @if (l.Amount < Math.Round(l.Qty * l.Rate, 2))

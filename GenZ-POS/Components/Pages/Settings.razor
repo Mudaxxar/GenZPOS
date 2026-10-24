@@ -77,6 +77,20 @@
             </RadzenTemplateForm>
         </RadzenCard>
 
+        @* ---------- How new products are stocked (owner 2026-10-24) ---------- *@
+        <RadzenCard class="rz-mb-3">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">New products are stocked by</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-2" Style="opacity:.7">
+                The default for new products; every product can still choose its own (Products → edit).
+            </RadzenText>
+            <RadzenRadioButtonList TValue="StockMode" Value="@Shop.DefaultStockMode" ValueChanged="SaveStockModeAsync" Orientation="Orientation.Vertical">
+                <Items>
+                    <RadzenRadioButtonListItem Value="StockMode.Piece" Text="Piece — every piece has its own barcode (shoes, clothes)" />
+                    <RadzenRadioButtonListItem Value="StockMode.Quantity" Text="Quantity — one barcode, bought and sold many times in any qty (rice per kg, sugar, oil)" />
+                </Items>
+            </RadzenRadioButtonList>
+        </RadzenCard>
+
         @* ---------- Barcode label ---------- *@
         <RadzenCard class="rz-mb-3">
             <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.75rem">
@@ -126,8 +140,43 @@
                             <td style="@labelStyle">Automatic</td>
                             <td>@(Config.AutoBackupDaily ? $"Once a day while GenZ-POS is open (newest {Config.KeepBackups} kept)" : "Off (turned off in the settings file)")</td>
                         </tr>
+                        @* Owner 2026-10-24: every backup also goes to a USB drive / cloud-synced folder automatically. *@
+                        <tr>
+                            <td style="@labelStyle">Also copied to</td>
+                            <td style="word-break:break-all">
+                                @if (Backup.CopyFolder is { } copyFolder)
+                                {
+                                    <span>@copyFolder</span>
+                                    @if (Backup.LastCopyAt is { } copied)
+                                    {
+                                        <span style="opacity:.7"> · last copy @copied.ToString("HH:mm")</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span style="color:var(--rz-warning-darker, #8a5300); font-weight:600">Not set — choose a USB or Google Drive / OneDrive folder</span>
+                                }
+                            </td>
+                        </tr>
                     </tbody>
                 </table>
+
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" class="rz-mt-2" Wrap="FlexWrap.Wrap">
+                    <RadzenButton Text="@(Backup.CopyFolder is null ? "Choose USB / cloud folder…" : "Change copy folder…")" Icon="drive_folder_upload"
+                                  ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined" Size="ButtonSize.Small" Click="ChooseCopyFolderAsync" />
+                    @if (Backup.CopyFolder is not null)
+                    {
+                        <RadzenButton Text="Copy newest now" Icon="sync" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" IsBusy="@copying" Click="CopyNewestNowAsync" />
+                        <RadzenButton Text="Stop copying" Icon="link_off" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="StopCopyingAsync" />
+                    }
+                </RadzenStack>
+
+                @if (Backup.LastCopyError is { } copyError)
+                {
+                    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-mt-2" Title="Copy to USB / cloud folder failed">
+                        @copyError Plug in the USB (or check the folder) and press "Copy newest now".
+                    </RadzenAlert>
+                }
 
                 @if (Backup.LastError is { } error)
                 {
@@ -209,6 +258,10 @@
         savingLogo = false;
     }
 
+    private Task SaveStockModeAsync(StockMode mode) =>
+        RunAsync(() => Shop.SaveDefaultStockModeAsync(mode),
+            mode == StockMode.Quantity ? "New products: by quantity" : "New products: one barcode per piece");
+
     private async Task RemoveLogoAsync()
     {
         if (!await ConfirmAsync("Remove the shop logo from receipts and invoices?")) return;
@@ -230,6 +283,30 @@
         savingShop = true;
         await RunAsync(() => Shop.SaveAsync(form.Name, form.Phone, form.Address, form.Footer, form.PrintFormat, form.ShowNameWithLogo), "Shop details saved");
         savingShop = false;
+    }
+
+    private bool copying;
+
+    private async Task ChooseCopyFolderAsync()
+    {
+        var folder = await Desktop.PickFolderAsync("Folder on a USB drive or in Google Drive / OneDrive for backup copies", Backup.CopyFolder);
+        if (folder is null) return;
+        if (await RunAsync(() => { Backup.SetCopyFolder(folder); return Task.CompletedTask; }, $"Every backup will also be copied to {folder}")
+            && Backup.ListBackups(1).Count > 0 && await ConfirmAsync("Copy the newest backup there now?"))
+            await CopyNewestNowAsync();
+    }
+
+    private async Task CopyNewestNowAsync()
+    {
+        copying = true;
+        try { await RunAsync(async () => { var file = await Backup.CopyNewestNowAsync(); Toast(NotificationSeverity.Success, $"Copied to {file}", 5000); }); }
+        finally { copying = false; }
+    }
+
+    private async Task StopCopyingAsync()
+    {
+        if (!await ConfirmAsync("Stop copying backups to the USB / cloud folder? (Copies already there stay.)")) return;
+        await RunAsync(() => { Backup.SetCopyFolder(null); return Task.CompletedTask; }, "Backups are no longer copied");
     }
 
     private async Task BackupNowAsync()

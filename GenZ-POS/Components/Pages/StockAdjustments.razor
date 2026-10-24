@@ -37,7 +37,7 @@
                 @if (countMode)
                 {
                     <RadzenFormField Text="Counted quantity" Style="width:100%">
-                        <RadzenNumeric TValue="decimal?" @bind-Value="counted" Min="0" ShowUpDown="false" />
+                        <RadzenNumeric TValue="decimal?" @bind-Value="counted" Min="0" ShowUpDown="false" Format="0.###" />
                     </RadzenFormField>
                     if (counted is decimal c && productId is int pid && products.FirstOrDefault(p => p.Id == pid) is { } cur)
                     {
@@ -51,7 +51,7 @@
                         <RadzenDropDown TValue="StockMovementType" OpenOnFocus="true" @bind-Value="type" Data="@types" TextProperty="Text" ValueProperty="Value" />
                     </RadzenFormField>
                     <RadzenFormField Text="Quantity" Style="width:100%">
-                        <RadzenNumeric TValue="decimal" @bind-Value="qty" Min="0" ShowUpDown="false" />
+                        <RadzenNumeric TValue="decimal" @bind-Value="qty" Min="0" ShowUpDown="false" Format="0.###" />
                     </RadzenFormField>
                 }
                 <DateBox Label="Date" @bind-Value="date" Style="width:100%" />

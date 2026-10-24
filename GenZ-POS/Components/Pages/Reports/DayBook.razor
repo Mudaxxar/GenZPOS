@@ -58,7 +58,7 @@ else
                     <Template><RadzenLink Path="@context.Link" Text="@context.RefText" /></Template>
                 </RadzenDataGridColumn>
                 <RadzenDataGridColumn Title="Party">
-                    <Template><RadzenLink Path="@context.PartyLink" Text="@context.Party" /></Template>
+                    <Template>@if (context.PartyLink.Length == 0) { <span>@context.Party</span> } else { <RadzenLink Path="@context.PartyLink" Text="@context.Party" /> }</Template>
                 </RadzenDataGridColumn>
                 <RadzenDataGridColumn Property="Method" Title="Method" Width="85px" />
                 <RadzenDataGridColumn Title="Cash in" Width="125px" TextAlign="TextAlign.Right">
@@ -98,6 +98,7 @@ else
                     <TotalLine Label="Net sales" Value="@Money(book.Totals.Sales - book.Totals.SaleReturns)" Strong="true" />
                     <TotalLine Label="Purchases" Value="@Money(book.Totals.Purchases)" />
                     <TotalLine Label="Purchase returns" Value="@Money(book.Totals.PurchaseReturns)" />
+                    <TotalLine Label="Expenses" Value="@Money(book.Totals.Expenses)" />
                 </RadzenStack>
             </RadzenColumn>
         </RadzenRow>
@@ -161,6 +162,7 @@ else
         lines.Add(["Sales returns", book.Totals.SaleReturns]);
         lines.Add(["Purchases", book.Totals.Purchases]);
         lines.Add(["Purchase returns", book.Totals.PurchaseReturns]);
+        lines.Add(["Expenses", book.Totals.Expenses]);
 
         var name = shownFrom == shownTo ? $"{shownFrom:yyyy-MM-dd}" : $"{shownFrom:yyyy-MM-dd} to {shownTo:yyyy-MM-dd}";
         var path = await Desktop.SaveTextFileAsync($"Day book {name}.csv", "CSV files (*.csv)|*.csv", Csv(lines));

@@ -54,6 +54,8 @@ public class StockService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser
             QtyOut = isOut ? qty : 0,
             Notes = notes,
         });
+        Audit.Add(db, currentUser, Audit.StockAdjusted,
+            $"{await ItemNameAsync(db, variantId)}: {type} {(isOut ? "-" : "+")}{qty:0.###} on {date:dd-MMM-yyyy}" + (string.IsNullOrWhiteSpace(notes) ? "" : $" ({notes.Trim()})"), variantId);
         await db.SaveChangesAsync();
         await tx.CommitAsync();
     }
@@ -97,10 +99,16 @@ public class StockService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser
             QtyOut = diff < 0 ? -diff : 0,
             Notes = note,
         });
+        Audit.Add(db, currentUser, Audit.StockAdjusted, $"{await ItemNameAsync(db, variantId)}: {note}", variantId);
         await db.SaveChangesAsync();
         await tx.CommitAsync();
         return diff;
     }
+
+    private static async Task<string> ItemNameAsync(AppDbContext db, int stockItemId) =>
+        await db.StockItems.Where(v => v.Id == stockItemId)
+            .Select(v => v.Barcode + " " + v.Product!.Name + (v.Colour != null ? " " + v.Colour : "") + (v.Size != null ? " " + v.Size : ""))
+            .FirstOrDefaultAsync() ?? $"item #{stockItemId}";
 
     /// <summary>Deletes a manual adjustment. Document movements are removed with their document.</summary>
     public async Task DeleteAdjustmentAsync(int movementId)
@@ -121,6 +129,8 @@ public class StockService(IDbContextFactory<AppDbContext> dbFactory, CurrentUser
         }
 
         db.StockMovements.Remove(m);
+        Audit.Add(db, currentUser, Audit.StockAdjusted,
+            $"{await ItemNameAsync(db, m.StockItemId)}: {m.Type} entry of {m.MovementDate:dd-MMM-yyyy} deleted (in {m.QtyIn:0.###}, out {m.QtyOut:0.###})", m.StockItemId);
         await db.SaveChangesAsync();
         await tx.CommitAsync();
     }

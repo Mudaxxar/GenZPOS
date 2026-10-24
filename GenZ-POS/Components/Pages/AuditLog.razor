@@ -1,0 +1,101 @@
+@page "/audit"
+@attribute [Authorize(Policy = Permissions.AuditView)]
+@inherits PageBase
+
+@* Audit log (owner 2026-10-24): who deleted, changed prices, gave big discounts, adjusted stock, entered expenses,
+   closed the day. Written by the services in the same transaction as the change (Services/Audit.cs); read-only. *@
+<RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Audit Log</RadzenText>
+
+<RadzenCard>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" class="rz-mb-2">
+        <DateRangeBar @bind-From="from" @bind-To="to" Changed="ReloadAsync" />
+        <RadzenFormField Text="What" Style="width:200px">
+            <RadzenDropDown TValue="string" @bind-Value="action" @bind-Value:after="ReloadAsync" Data="@Audit.Actions" AllowClear="true" Placeholder="Everything" />
+        </RadzenFormField>
+        <RadzenFormField Text="User" Style="width:160px">
+            <RadzenDropDown TValue="string" @bind-Value="user" @bind-Value:after="ReloadAsync" Data="@users" AllowClear="true" Placeholder="Everyone" />
+        </RadzenFormField>
+        <RadzenFormField Text="Search (invoice #, barcode, name…)" Style="flex:1; min-width:200px">
+            <RadzenTextBox @bind-Value="search" @bind-Value:after="ReloadAsync" />
+        </RadzenFormField>
+    </RadzenStack>
+
+    <RadzenDataGrid @ref="grid" TItem="AuditEntry" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
+                    AllowPaging="true" PageSize="25" ShowPagingSummary="true" Density="Density.Compact" EmptyText="Nothing recorded in this period.">
+        <Columns>
+            <RadzenDataGridColumn Title="When" Width="150px"><Template>@Date(context.At) @context.At.ToString("HH:mm")</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="User" Width="110px"><Template><strong>@context.UserName</strong></Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="What" Width="170px">
+                <Template>
+                    <RadzenBadge BadgeStyle="@Style(context.Action)" Variant="Variant.Flat" Shade="Shade.Lighter" Text="@context.Action" />
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Details"><Template><span style="white-space:normal">@context.Details</span></Template></RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+    <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
+        Logged: deleted invoices / returns / purchases / payments / expenses, edited purchases, price changes, discounts of
+        @Audit.BigDiscountPercent% or more, stock in / out and counts, expenses and day closings. Logins and user changes are in the log files.
+    </RadzenText>
+</RadzenCard>
+
+@code {
+    private RadzenDataGrid<AuditEntry> grid = default!;
+    private List<AuditEntry>? rows; // null until first load → Radzen calls LoadData right after first render
+    private int count, loadVersion;
+    private bool loading = true;
+    private DateTime from = DateTime.Today.AddDays(-6), to = DateTime.Today;
+    private string? action, user, search;
+    private List<string> users = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        users = await db.AuditLog.AsNoTracking().Where(a => a.UserName != null).Select(a => a.UserName!).Distinct().OrderBy(u => u).ToListAsync();
+    }
+
+    private async Task LoadAsync(LoadDataArgs args)
+    {
+        var version = ++loadVersion;
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var end = to.Date.AddDays(1);
+            var q = db.AuditLog.AsNoTracking().Where(a => a.At >= from.Date && a.At < end);
+            if (action is not null) q = q.Where(a => a.Action == action);
+            if (user is not null) q = q.Where(a => a.UserName == user);
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.Trim();
+                q = int.TryParse(s.TrimStart('#'), out var no)
+                    ? q.Where(a => a.RefId == no || a.Details!.Contains(s))
+                    : q.Where(a => a.Details!.Contains(s));
+            }
+            var total = await q.CountAsync();
+            var page = await q.OrderByDescending(a => a.At).ThenByDescending(a => a.Id).Skip(args.Skip ?? 0).Take(args.Top ?? 25).ToListAsync();
+            if (version != loadVersion) return;
+            count = total;
+            rows = page;
+        }
+        catch (Exception ex)
+        {
+            rows ??= [];
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        finally
+        {
+            if (version == loadVersion) loading = false;
+        }
+    }
+
+    private Task ReloadAsync() => grid.FirstPage(true);
+
+    private static BadgeStyle Style(string action) => action switch
+    {
+        _ when action.EndsWith("deleted") => BadgeStyle.Danger,
+        Audit.BigDiscount or Audit.RateBelowPrice or Audit.PriceChanged => BadgeStyle.Warning,
+        Audit.DayClosed => BadgeStyle.Success,
+        _ => BadgeStyle.Info,
+    };
+}

@@ -82,7 +82,7 @@ else
                 <RadzenFormField Text="Article no." Style="width:135px" class="readonly-field">
                     <RadzenTextBox Value="@pickArticle" ReadOnly="true" tabindex="-1" title="Automatic, unique and read-only (ART000001…)" />
                 </RadzenFormField>
-                <RadzenFormField Text="Cost price" Style="width:115px">
+                <RadzenFormField Text="@(PickedProduct is { HasPurchaseUnit: true } pu ? $"Cost / {pu.PurchaseUnit}" : PickIsQuantity ? $"Cost / {PickedProduct!.Unit}" : "Cost price")" Style="width:115px">
                     <RadzenNumeric TValue="decimal" @bind-Value="pickCost" @bind-Value:after="PickCostChanged" Min="0" ShowUpDown="false" Format="N2"
                                    Disabled="@(pickId is null)" />
                 </RadzenFormField>
@@ -90,13 +90,31 @@ else
                     <RadzenNumeric TValue="decimal?" @bind-Value="pickProfit" @bind-Value:after="PickProfitChanged" ShowUpDown="false" Format="0.##"
                                    Disabled="@(pickId is null)" title="On cost: retail = cost + profit %" />
                 </RadzenFormField>
-                <RadzenFormField Text="Retail price" Style="width:115px">
+                <RadzenFormField Text="@(PickIsQuantity ? $"Retail / {PickedProduct!.Unit}" : "Retail price")" Style="width:115px">
                     <RadzenNumeric TValue="decimal" @bind-Value="pickRetail" @bind-Value:after="PickRetailChanged" Min="0" ShowUpDown="false" Format="N2"
                                    Disabled="@(pickId is null)" title="Becomes the item's sale price when you save the purchase" />
                 </RadzenFormField>
-                <RadzenButton Icon="@(articleOpen ? "expand_less" : "add")" ButtonStyle="ButtonStyle.Secondary" Variant="@(articleOpen ? Variant.Flat : Variant.Outlined)"
-                              title="@(articleOpen ? "Collapse" : pickId is null ? "Pick an item first" : "Expand: colour, size, barcode and quantity")"
-                              Click="PlusClickedAsync" />
+                @if (PickIsQuantity)
+                {
+                    @* Quantity product (rice): one barcode, qty in its purchase unit (2 Bag = 100 Kg) → Add to the same item. *@
+                    var qp = PickedProduct!;
+                    <RadzenFormField Text="@($"Qty ({(qp.HasPurchaseUnit ? qp.PurchaseUnit : qp.Unit)})")" Style="width:110px">
+                        <RadzenNumeric TValue="decimal" @bind-Value="pickQty" Min="0" ShowUpDown="false" Format="0.###" />
+                    </RadzenFormField>
+                    <RadzenButton Text="Add" Icon="add_shopping_cart" Click="AddQuantityAsync" Disabled="@(pickQty <= 0)" data-enter-submit="true" />
+                    @if (qp.HasPurchaseUnit && pickQty > 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                            = @Qty(pickQty * qp.PurchaseUnitQty!.Value) @qp.Unit · cost @Money(PickUnitCost) / @qp.Unit
+                        </RadzenText>
+                    }
+                }
+                else
+                {
+                    <RadzenButton Icon="@(articleOpen ? "expand_less" : "add")" ButtonStyle="ButtonStyle.Secondary" Variant="@(articleOpen ? Variant.Flat : Variant.Outlined)"
+                                  title="@(articleOpen ? "Collapse" : pickId is null ? "Pick an item first" : "Expand: colour, size, barcode and quantity")"
+                                  Click="PlusClickedAsync" />
+                }
             </RadzenStack>
 
             @* The picked product's panel (opens on pick, "+" toggles it): barcode, size, colour, qty for the article no. above;
@@ -152,10 +170,20 @@ else
                     <RadzenDataGridColumn Title="Size" Width="80px">
                         <Template><strong>@productMap.GetValueOrDefault(context.StockItemId)?.Size</strong></Template>
                     </RadzenDataGridColumn>
-                    <RadzenDataGridColumn Title="Qty" Width="70px">
+                    <RadzenDataGridColumn Title="Qty" Width="110px">
                         <Template>
                             @* One barcode per piece: a line is 1 piece (remove the line to buy fewer). Older lines of several can still be changed. *@
-                            @if (context.Qty == 1 && !oldMultiLines.Contains(context))
+                            @{ var lineItem = productMap.GetValueOrDefault(context.StockItemId); }
+                            @if (lineItem?.IsQuantity == true)
+                            {
+                                @* Quantity item: qty in its unit (kg), any amount; bags shown under it. *@
+                                <RadzenNumeric TValue="decimal" @bind-Value="context.Qty" Min="0" ShowUpDown="false" Format="0.###" Style="width:100%" />
+                                <div style="font-size:0.75rem; opacity:0.7">
+                                    @lineItem.Unit@(lineItem.PurchaseUnitQty is > 0 && !string.IsNullOrEmpty(lineItem.PurchaseUnit)
+                                        ? $" = {Qty(context.Qty / lineItem.PurchaseUnitQty.Value)} {lineItem.PurchaseUnit}" : "")
+                                </div>
+                            }
+                            else if (context.Qty == 1 && !oldMultiLines.Contains(context))
                             {
                                 <span style="padding-left:0.5rem">1</span>
                             }
@@ -273,16 +301,63 @@ else
     // a new cost keeps the profit % (retail follows), or works out the % when there is none yet.
     private void PickCostChanged()
     {
-        if (pickProfit is { } pct) pickRetail = Pricing.RetailFromProfit(pickCost, pct);
-        else pickProfit = Pricing.ProfitPercent(pickCost, pickRetail);
+        if (pickProfit is { } pct) pickRetail = Pricing.RetailFromProfit(PickUnitCost, pct);
+        else pickProfit = Pricing.ProfitPercent(PickUnitCost, pickRetail);
     }
 
     private void PickProfitChanged()
     {
-        if (pickProfit is { } pct) pickRetail = Pricing.RetailFromProfit(pickCost, pct);
+        if (pickProfit is { } pct) pickRetail = Pricing.RetailFromProfit(PickUnitCost, pct);
     }
 
-    private void PickRetailChanged() => pickProfit = Pricing.ProfitPercent(pickCost, pickRetail);
+    private void PickRetailChanged() => pickProfit = Pricing.ProfitPercent(PickUnitCost, pickRetail);
+
+    // ---- Quantity products (owner 2026-10-24: rice bought in 50 kg bags, sold per kg) ----
+    private ProductPick? PickedProduct => pickId is int id ? productPicks.FirstOrDefault(p => p.Id == id) : null;
+    private bool PickIsQuantity => PickedProduct?.IsQuantity == true;
+    /// <summary>Qty typed in the product's purchase unit (Bags), or its unit (Kg) when it has none.</summary>
+    private decimal pickQty = 1;
+
+    /// <summary>Cost per stock unit (kg): the typed cost is per bag for a product bought in bags.</summary>
+    private decimal PickUnitCost => PickedProduct is { HasPurchaseUnit: true } p ? pickCost / p.PurchaseUnitQty!.Value : pickCost;
+
+    /// <summary>
+    /// Adds the picked quantity product: its one stock item (created the first time it is bought, with a new ART… and
+    /// barcode), qty converted to its unit (2 Bag → 100 Kg), cost per unit. Same item and cost already on the bill →
+    /// the qty is added to that line.
+    /// </summary>
+    private async Task AddQuantityAsync()
+    {
+        if (PickedProduct is not { } p || pickQty <= 0) return;
+        var qty = p.HasPurchaseUnit ? Math.Round(pickQty * p.PurchaseUnitQty!.Value, 3) : Math.Round(pickQty, 3);
+        var unitCost = Math.Round(PickUnitCost, 2);
+        var stockItemId = p.FirstStockItemId ?? 0;
+        if (stockItemId == 0)
+        {
+            var ok = await RunAsync(async () =>
+                stockItemId = (await StockItems.EnsureOneAsync(p.Id, pickArticle, null, null, null,
+                    new StockItemPrices(unitCost, pickRetail, pickReorder))).StockItemId);
+            if (!ok) return;
+            newPieces.Add(stockItemId);
+            await LoadProductsAsync();
+        }
+
+        if (lines.FirstOrDefault(l => l.StockItemId == stockItemId && l.Cost == unitCost) is { } same)
+        {
+            same.Qty += qty;
+            same.SalePrice = pickRetail;
+        }
+        else
+        {
+            lines.Add(new PurchaseLine { StockItemId = stockItemId, Qty = qty, Cost = unitCost, SalePrice = pickRetail });
+        }
+        Toast(NotificationSeverity.Success,
+            $"{p.DisplayName}: +{(p.HasPurchaseUnit ? $"{Qty(pickQty)} {p.PurchaseUnit} = " : "")}{Qty(qty)} {p.Unit}", 2500);
+        pickQty = 1;
+        await linesGrid.Reload();
+        try { await itemDropDown.FocusAsync(); }
+        catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or InvalidOperationException) { /* page closing */ }
+    }
 
     private decimal SubTotal => lines.Sum(l => Math.Round(l.Qty * l.Cost, 2));
     private decimal Total => SubTotal - Discount;
@@ -356,11 +431,16 @@ else
         pickArticle = null;
         if (pickId is int id && productPicks.FirstOrDefault(p => p.Id == id) is { } p)
         {
-            pickCost = p.PurchasePrice;
+            // A product bought in bags: the cost box is per bag (the stock item's cost is per kg).
+            pickCost = p.HasPurchaseUnit ? Math.Round(p.PurchasePrice * p.PurchaseUnitQty!.Value, 2) : p.PurchasePrice;
             pickRetail = p.SalePrice;
             pickReorder = p.ReorderLevel;
-            pickProfit = Pricing.ProfitPercent(pickCost, pickRetail);
-            if (!reservedArticles.TryGetValue(id, out pickArticle))
+            pickProfit = Pricing.ProfitPercent(PickUnitCost, pickRetail);
+            pickQty = 1;
+            // A quantity product keeps its one stock item, so its own article no. (no new one).
+            if (p.IsQuantity && p.FirstStockItemId is int existing && productMap.GetValueOrDefault(existing) is { } item)
+                pickArticle = item.ArticleNo;
+            else if (!reservedArticles.TryGetValue(id, out pickArticle))
                 await RunAsync(async () =>
                 {
                     await using var db = await DbFactory.CreateDbContextAsync();
@@ -372,7 +452,7 @@ else
             pickCost = pickRetail = pickReorder = 0;
             pickProfit = null;
         }
-        articleOpen = pickId is not null;
+        articleOpen = pickId is not null && !PickIsQuantity; // quantity products have no colour / size panel
         articlePanelKey++;
     }
 

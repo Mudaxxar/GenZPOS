@@ -10,7 +10,11 @@ public static class Fmt
     public const string ShopName = "GenZ-POS";
 
     public static string Money(decimal value) => $"Rs {value:N2}";
-    public static string Qty(decimal value) => value.ToString("#,0.##");
+    public static string Qty(decimal value) => value.ToString("#,0.###");
+
+    /// <summary>"0.25 Kg" for a measured unit; just "1" for pieces (Pcs / Pair / empty), as before.</summary>
+    public static string QtyUnit(decimal value, string? unit) =>
+        string.IsNullOrWhiteSpace(unit) || unit.Trim().ToLowerInvariant() is "pcs" or "pc" or "pair" ? Qty(value) : $"{Qty(value)} {unit.Trim()}";
     public static string Date(DateTime value) => value.ToString("dd-MMM-yyyy");
 
     public const string DateFormat = "dd-MMM-yyyy";
@@ -78,7 +82,10 @@ public static class Fmt
     public static readonly string[] PackSizes =
         ["Quarter", "Gallon", "Drum", "Dabba", "1 Ltr", "4 Ltr", "10 Ltr", "20 Ltr", "1 Kg", "5 Kg", "20 Kg"];
 
-    public static readonly string[] Units = ["Pcs", "Pair", "Ltr", "Kg", "Box", "Roll", "Set"];
+    public static readonly string[] Units = ["Pcs", "Pair", "Kg", "g", "Ltr", "ml", "Mtr", "Dozen", "Box", "Pack", "Bag", "Roll", "Set"];
+
+    /// <summary>Units a quantity product is bought in (Products → "Bought in").</summary>
+    public static readonly string[] PurchaseUnits = ["Bag", "Sack", "Carton", "Box", "Drum", "Tin", "Pack", "Dozen"];
 
     public static string Csv(IEnumerable<IEnumerable<object?>> rows) =>
         string.Join(Environment.NewLine, rows.Select(r => string.Join(",", r.Select(CsvCell))));

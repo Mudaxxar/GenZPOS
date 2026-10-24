@@ -30,6 +30,10 @@ public static class Permissions
     public const string ReportsItemSales = "Reports.ItemSales";
     public const string ReportsBalances = "Reports.Balances";
 
+    public const string ExpensesManage = "Expenses.Manage";
+    public const string DayClosing = "DayClosing.Manage";
+    public const string AuditView = "Audit.View";
+
     public const string SettingsManage = "Settings.Manage";
     public const string UsersManage = "Users.Manage";
 
@@ -70,10 +74,16 @@ public static class Permissions
             new(ReportsItemSales, "Item / brand sales"),
             new(ReportsBalances, "Receivables and payables"),
         ]),
+        new("Money",
+        [
+            new(ExpensesManage, "Enter, view and delete shop expenses"),
+            new(DayClosing, "Close the day: count the cash drawer, Z-report"),
+        ]),
         new("Administration",
         [
             new(SettingsManage, "Shop settings, backup and restore"),
             new(UsersManage, "Users, roles and rights"),
+            new(AuditView, "Audit log: who deleted, changed prices, gave big discounts …"),
         ]),
     ];
 

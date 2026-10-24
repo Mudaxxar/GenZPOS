@@ -85,6 +85,20 @@ public class DesktopService
         return path;
     }
 
+    /// <summary>Shows a folder picker (e.g. the USB / cloud folder for backup copies). Null if cancelled.</summary>
+    public async Task<string?> PickFolderAsync(string title, string? initial = null)
+    {
+        string? path = null;
+        await Dispatch(() =>
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = title };
+            if (!string.IsNullOrWhiteSpace(initial) && Directory.Exists(initial)) dialog.InitialDirectory = initial;
+            if (dialog.ShowDialog(_window) == true)
+                path = dialog.FolderName;
+        });
+        return path;
+    }
+
     /// <summary>Reads a whole file into memory; works while the file is open in Excel.</summary>
     public async Task<MemoryStream> ReadFileAsync(string path)
     {

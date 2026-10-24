@@ -39,6 +39,8 @@ else
                 <TotalLine Label="Cost of goods" Value="@Money(Cost)" />
                 <TotalLine Label="Gross profit" Value="@Money(Profit)" Strong="true" Danger="@(Profit < 0)" />
                 <TotalLine Label="Margin" Value="@MarginText(TotalMargin)" />
+                <TotalLine Label="Expenses" Value="@("− " + Money(Expenses))" />
+                <TotalLine Label="Net profit" Value="@Money(NetProfit)" Strong="true" Danger="@(NetProfit < 0)" />
             </RadzenStack>
         </RadzenStack>
 
@@ -81,10 +83,18 @@ else
                     <Template>@MarginText(context.Margin)</Template>
                     <FooterTemplate><strong>@MarginText(TotalMargin)</strong></FooterTemplate>
                 </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Expenses" TextAlign="TextAlign.Right">
+                    <Template>@(context.Expenses == 0 ? "" : Money(context.Expenses))</Template>
+                    <FooterTemplate><strong>@Money(Expenses)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Net profit" TextAlign="TextAlign.Right">
+                    <Template><strong style="@(context.NetProfit < 0 ? "color:var(--rz-danger)" : null)">@Money(context.NetProfit)</strong></Template>
+                    <FooterTemplate><strong>@Money(NetProfit)</strong></FooterTemplate>
+                </RadzenDataGridColumn>
             </Columns>
         </RadzenDataGrid>
         <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
-            Net sales = invoice totals (after discount) − sales returns. Cost of goods = items sold × purchase price at the time of sale − returned items at the same cost.
+            Net sales = invoice totals (after discount) − sales returns. Cost of goods = items sold × purchase price at the time of sale − returned items at the same cost. Net profit = gross profit − expenses (Money → Expenses).
         </RadzenText>
     </RadzenCard>
 }
@@ -102,7 +112,9 @@ else
     private decimal NetSales => rows?.Sum(r => r.NetSales) ?? 0;
     private decimal Cost => rows?.Sum(r => r.Cost) ?? 0;
     private decimal Profit => NetSales - Cost;
-    private decimal? TotalMargin => NetSales == 0 ? null : Math.Round(Profit / NetSales * 100, 1);
+    private decimal Expenses => rows?.Sum(r => r.Expenses) ?? 0;
+    private decimal NetProfit => Profit - Expenses;
+    private decimal? TotalMargin =>NetSales == 0 ? null : Math.Round(Profit / NetSales * 100, 1);
 
     private static string MarginText(decimal? m) => m is decimal v ? $"{v:0.#}%" : "";
 
@@ -142,11 +154,11 @@ else
     private async Task ExportAsync()
     {
         if (rows is null) return;
-        var lines = new List<object?[]> { new object?[] { shownByMonth ? "Month" : "Date", "Invoices", "Gross sales", "Discount", "Returns", "Net sales", "Cost of goods", "Gross profit", "Margin %" } };
+        var lines = new List<object?[]> { new object?[] { shownByMonth ? "Month" : "Date", "Invoices", "Gross sales", "Discount", "Returns", "Net sales", "Cost of goods", "Gross profit", "Margin %", "Expenses", "Net profit" } };
         lines.AddRange(rows.Select(r => new object?[]
-            { shownByMonth ? r.Period.ToString("MMM yyyy") : Date(r.Period), r.Invoices, r.GrossSales, r.Discount, r.Returns, r.NetSales, r.Cost, r.Profit, r.Margin }));
+            { shownByMonth ? r.Period.ToString("MMM yyyy") : Date(r.Period), r.Invoices, r.GrossSales, r.Discount, r.Returns, r.NetSales, r.Cost, r.Profit, r.Margin, r.Expenses, r.NetProfit }));
         lines.Add(["Total", rows.Sum(r => r.Invoices), rows.Sum(r => r.GrossSales), rows.Sum(r => r.Discount), rows.Sum(r => r.Returns),
-            NetSales, Cost, Profit, TotalMargin]);
+            NetSales, Cost, Profit, TotalMargin, Expenses, NetProfit]);
 
         var path = await Desktop.SaveTextFileAsync($"Sales and profit {shownFrom:yyyy-MM-dd} to {shownTo:yyyy-MM-dd}.csv", "CSV files (*.csv)|*.csv", Csv(lines));
         if (path is not null)

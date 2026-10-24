@@ -12,7 +12,7 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
         currentUser.Demand(Permissions.PurchasesManage);
         await using var db = await dbFactory.CreateDbContextAsync();
         await using var tx = await db.Database.BeginTransactionAsync();
-        var id = await CreateInAsync(db, purchase);
+        var id = await CreateInAsync(db, purchase, currentUser);
         await tx.CommitAsync();
         return id;
     }
@@ -21,7 +21,7 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
     /// Saves a new bill with its stock movements and prices on <paramref name="db"/>, inside the caller's transaction
     /// (the caller checks rights and commits). Also used by the Excel stock import (ProductExcelService).
     /// </summary>
-    internal static async Task<int> CreateInAsync(AppDbContext db, Purchase purchase)
+    internal static async Task<int> CreateInAsync(AppDbContext db, Purchase purchase, CurrentUser user)
     {
         var lines = Prepare(purchase);
         purchase.CreatedAt = DateTime.Now;
@@ -32,20 +32,28 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
         await db.SaveChangesAsync();
 
         await RecomputePurchasePriceAsync(db, lines.Select(l => l.StockItemId));
-        await ApplyRetailPricesAsync(db, lines);
+        await ApplyRetailPricesAsync(db, lines, user, purchase.Id);
         await db.SaveChangesAsync();
         return purchase.Id;
     }
 
     /// <summary>The retail price typed on a purchase line (cost + profit %) becomes the product's sale price.</summary>
-    private static async Task ApplyRetailPricesAsync(AppDbContext db, List<PurchaseLine> lines)
+    private static async Task ApplyRetailPricesAsync(AppDbContext db, List<PurchaseLine> lines, CurrentUser user, int purchaseId)
     {
         var prices = lines.Where(l => l.SalePrice is not null)
             .GroupBy(l => l.StockItemId).ToDictionary(g => g.Key, g => g.Last().SalePrice!.Value);
         if (prices.Count == 0) return;
         var ids = prices.Keys.ToList();
-        foreach (var product in await db.StockItems.Where(v => ids.Contains(v.Id)).ToListAsync())
-            product.SalePrice = prices[product.Id];
+        var changed = new List<string>();
+        foreach (var item in await db.StockItems.Include(v => v.Product).Where(v => ids.Contains(v.Id)).ToListAsync())
+        {
+            if (item.SalePrice != prices[item.Id] && item.SalePrice != 0)
+                changed.Add($"{item.Barcode} {item.Product?.Name} {item.SalePrice:N2} → {prices[item.Id]:N2}");
+            item.SalePrice = prices[item.Id];
+        }
+        // Audit: sale prices changed by a purchase (one entry per bill; a new item's first price is not a change).
+        if (changed.Count > 0)
+            Audit.Add(db, user, Audit.PriceChanged, $"Purchase #{purchaseId}: " + string.Join("; ", changed), purchaseId);
     }
 
     /// <summary>
@@ -88,6 +96,7 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
         }
 
         var affected = purchase.Lines.Select(l => l.StockItemId).Concat(lines.Select(l => l.StockItemId)).Distinct().ToList();
+        var (oldTotal, oldPaid, oldQty) = (purchase.Total, purchase.Paid, purchase.Lines.Sum(l => l.Qty));
 
         purchase.PurchaseDate = changes.PurchaseDate;
         purchase.SupplierId = changes.SupplierId;
@@ -108,7 +117,9 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
         await db.SaveChangesAsync();
 
         await RecomputePurchasePriceAsync(db, affected);
-        await ApplyRetailPricesAsync(db, lines);
+        await ApplyRetailPricesAsync(db, lines, currentUser, purchase.Id);
+        Audit.Add(db, currentUser, Audit.PurchaseEdited,
+            $"Purchase #{purchase.Id}: total {oldTotal:N2} → {purchase.Total:N2}, qty {oldQty:0.###} → {lines.Sum(l => l.Qty):0.###}, paid {oldPaid:N2} → {purchase.Paid:N2}", purchase.Id);
         await db.SaveChangesAsync();
         await tx.CommitAsync();
     }
@@ -194,6 +205,9 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
             .Where(m => m.Type == StockMovementType.Purchase && m.RefId == purchaseId)
             .ExecuteDeleteAsync();
         db.Purchases.Remove(purchase);
+        Audit.Add(db, currentUser, Audit.PurchaseDeleted,
+            $"Purchase #{purchaseId} of {purchase.PurchaseDate:dd-MMM-yyyy}, bill {purchase.BillNo ?? "-"}: {purchase.Lines.Count} line(s), " +
+            $"qty {purchase.Lines.Sum(l => l.Qty):0.###}, total {purchase.Total:N2}, paid {purchase.Paid:N2}", purchaseId);
         await db.SaveChangesAsync();
 
         await RecomputePurchasePriceAsync(db, productIds);
