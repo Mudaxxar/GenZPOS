@@ -14,3 +14,47 @@
     cursor: default;
     font-weight: 600;
 }
+
+/* ---------- One card per article (owner 2026-10-24) ---------- */
+.article-card {
+    container: article / inline-size;
+}
+
+.article-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rz-base-200, #eee);
+}
+
+.article-title strong { color: var(--rz-primary); }
+
+.article-sum {
+    font-size: .85rem;
+    color: var(--rz-text-secondary-color);
+}
+
+/* Item | Article no. | Cost | Profit % | Retail | buttons — ONE row. */
+.article-row {
+    display: grid;
+    grid-template-columns: minmax(0, 2.6fr) minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 0.8fr) minmax(0, 1.1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.article-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Narrow card: Item and Article no. on the first line, prices on the second. */
+@container article (max-width: 640px) {
+    .article-row {
+        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+    }
+}
