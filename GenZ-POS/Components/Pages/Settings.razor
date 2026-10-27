@@ -6,6 +6,7 @@
 @inject BackupService Backup
 @inject AppConfig Config
 @inject DesktopService Desktop
+@inject StartupState Startup
 
 <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Settings &amp; Backup</RadzenText>
 
@@ -91,6 +92,35 @@
             </RadzenRadioButtonList>
         </RadzenCard>
 
+        @* ---------- Printers on this computer (owner 2026-10-26) ----------
+           Saved in this PC's appsettings.json (ReceiptPrinter / LabelPrinter), read at startup; the receipt, Z-report,
+           labels and label designer screens all start with these. *@
+        <RadzenCard class="rz-mb-3">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">Printers on this computer</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-2" Style="opacity:.7">Saved in @AppConfig.FilePath</RadzenText>
+            <RadzenStack Gap="0.75rem">
+                @foreach (var (label, isLabel) in new[] { ("Receipt printer (sales receipts, Z-report)", false), ("Label printer (barcode labels)", true) })
+                {
+                    var saved = isLabel ? Config.LabelPrinter : Config.ReceiptPrinter;
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+                        <RadzenFormField Text="@label" Style="flex:1; min-width:220px">
+                            <RadzenDropDown TValue="string" Data="@installedPrinters" Value="@saved" ValueChanged="@((string p) => SetPrinter(isLabel, p))"
+                                            AllowClear="true" Placeholder="@(isLabel ? "Choose…" : $"Windows default ({ReceiptPrinter.DefaultPrinter() ?? "none"})")" />
+                        </RadzenFormField>
+                        <RadzenButton Text="Test" Icon="print" ButtonStyle="ButtonStyle.Light" IsBusy="@(isLabel ? testingLabel : testingReceipt)"
+                                      Disabled="@(isLabel && string.IsNullOrEmpty(saved))" Click="@(() => TestPrintAsync(isLabel))"
+                                      title="@(isLabel ? "Print one sample label with the shop's label design" : "Print a short sample receipt")" />
+                    </RadzenStack>
+                    @if (!string.IsNullOrEmpty(saved) && !installedPrinters.Contains(saved, StringComparer.OrdinalIgnoreCase))
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="color:var(--rz-danger); margin-top:-0.5rem">
+                            "@saved" (from appsettings.json) is not installed on this computer. Choose it again from the list.
+                        </RadzenText>
+                    }
+                }
+            </RadzenStack>
+        </RadzenCard>
+
         @* ---------- Barcode label ---------- *@
         <RadzenCard class="rz-mb-3">
             <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.75rem">
@@ -122,6 +152,15 @@
             {
                 <table style="width:100%; border-collapse:collapse">
                     <tbody>
+                        <tr>
+                            <td style="@labelStyle">Database</td>
+                            <td style="word-break:break-all">
+                                <strong>@Config.ServerName</strong> / <strong>@Config.DatabaseName</strong>
+                                <RadzenButton Text="Change…" Icon="storage" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light" class="rz-ms-2"
+                                              title="Choose another SQL Server / database for this computer (GenZ-POS restarts)" Click="@Startup.OpenSetup" />
+                            </td>
+                        </tr>
+                        <tr><td style="@labelStyle">This PC's settings</td><td style="word-break:break-all" title="Database (ConnectionString), printers, backup folder">@AppConfig.FilePath</td></tr>
                         <tr><td style="@labelStyle">Backup folder</td><td style="word-break:break-all">@Backup.Folder</td></tr>
                         <tr>
                             <td style="@labelStyle">Last backup</td>
@@ -270,6 +309,60 @@
     private bool backingUp;
 
     private bool BackupIsOld => Backup.LastBackupAt is not { } at || at < DateTime.Now.AddDays(-2);
+
+    // ---------- printers (appsettings.json of this PC) ----------
+    private IReadOnlyList<string> installedPrinters = ReceiptPrinter.InstalledPrinters();
+    private bool testingLabel, testingReceipt;
+
+    private void SetPrinter(bool isLabel, string? printer)
+    {
+        if (isLabel) Config.LabelPrinter = printer; else Config.ReceiptPrinter = printer;
+        try
+        {
+            Config.Save();
+            Toast(NotificationSeverity.Success, $"{(isLabel ? "Label" : "Receipt")} printer: {printer ?? "Windows default"}", 2500);
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, $"Could not save {AppConfig.FilePath}: {ex.Message}", 6000);
+        }
+    }
+
+    /// <summary>A sample label (shop's design) or a short sample receipt on the chosen printer, with GDI like the real ones.</summary>
+    private async Task TestPrintAsync(bool isLabel)
+    {
+        if (isLabel) testingLabel = true; else testingReceipt = true;
+        try
+        {
+            string? problem;
+            if (isLabel)
+            {
+                var (design, printer) = (Shop.LabelDesign, Config.LabelPrinter);
+                problem = await Task.Run(() => LabelPrinter.Print([LabelDesign.Sample], design, Shop, printer));
+            }
+            else
+            {
+                var sample = new Sale
+                {
+                    SaleDate = DateTime.Today, CreatedAt = DateTime.Now, CustomerId = Customer.WalkInId,
+                    Customer = new Customer { Name = "Test print" }, SubTotal = 100, Total = 100, Paid = 100,
+                    Lines = [new SaleLine
+                    {
+                        Qty = 1, Rate = 100, Amount = 100,
+                        StockItem = new StockItem { ArticleNo = "ART000000", Barcode = "TEST", Product = new Product { Name = "Test print — printer works" } },
+                    }],
+                };
+                var (printer, width) = (Config.ReceiptPrinter, Shop.PrintFormat == PrintFormat.Receipt58 ? 58 : 80);
+                problem = await Task.Run(() => ReceiptPrinter.Print(sample, 0, Shop, printer, width));
+            }
+            if (problem is null) Toast(NotificationSeverity.Success, "Test page sent to the printer", 3000);
+            else Toast(NotificationSeverity.Error, problem, 6000);
+        }
+        finally
+        {
+            testingLabel = testingReceipt = false;
+        }
+    }
 
     protected override void OnInitialized()
     {

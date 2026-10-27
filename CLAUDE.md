@@ -190,7 +190,10 @@ GenZ-POS/                  WPF + Razor SDK project (net10.0-windows)
   with `::deep`); styles for Radzen popups (dropdown item templates) must go in `wwwroot/css/app.css` because popups
   render outside the page's CSS scope.
 - **F-key shortcuts:** `data-hotkey="F9"` on a button (clicked) or field (focused), handled by `wwwroot/js/hotkeys.js`.
-  Sale screen: F2 item, F4 customer, F6 return item (exchange), F7 hold, F8 paid, F9 save & print; invoice view: F2 new sale; day closing: F9 close. Show them as `<kbd>`.
+  Ctrl combinations work too (`data-hotkey="Ctrl+R"`; only where an element has it, so Ctrl+C/V stay normal). Sale screen: F2 item,
+  F4 customer, F6 return item (exchange), F7 hold, F8 paid, F9 save & print, **Ctrl+R clear / refresh** (reloads items &
+  stock); New / Edit Purchase: **Ctrl+R** Clear (unsaved new pieces are deleted again) / Reload the saved bill; invoice
+  view: F2 new sale; day closing: F9 close. Show them as `<kbd>`.
 - **Back navigation (owner, 2026-10-20):** one "← Back" button in the top bar (`MainLayout`), on every page. It uses
   the layout's own list of visited screens (C#, no JS / browser history; cleared on log out) and is disabled when
   there is nothing to go back to. Pages don't need their own back button.
@@ -204,8 +207,8 @@ GenZ-POS/                  WPF + Razor SDK project (net10.0-windows)
 - **New Sale entry strip (owner: like New Purchase), two rows inside the cart column:** Barcode (focused when the screen
   opens) | Item (F2: `RadzenAutoComplete` type-ahead over stock items — barcode, article no., name, company, colour,
   size; IN STOCK ONLY and NOT ALREADY IN THE CART (owner); exact code first; typed code + Enter picks it; a scanned sold-out barcode only warns) / Article no. · Colour · Size · **Qty = 1 (read-only, owner: one barcode per piece; a piece can be in the cart once)** →
-  Rate → Add → back to Barcode. A scan fills the
-  strip and moves to Rate (it does not add straight to the cart). Cart lines show "Article · Barcode" (colour · size under it); every item detail line (receipt, invoice, return) reads Article no. · Barcode · Colour · Size (owner's order)
+  Rate → Add → back to Barcode. A scan (owner 2026-10-26) ADDS A PIECE STRAIGHT TO THE CART at its sale price and keeps the cursor in Barcode (rate can be changed in the cart line); a quantity item fills the strip and goes to Qty. The
+  Item box (F2) still fills the strip for Rate → Add. Cart lines show "Article · Barcode" (colour · size under it); every item detail line (receipt, invoice, return) reads Article no. · Barcode · Colour · Size (owner's order)
   then the item (product NAME only — owner: no company / pack / category on sale lines, receipts or invoices).
 
 ## Gotchas
@@ -241,15 +244,37 @@ GenZ-POS/                  WPF + Razor SDK project (net10.0-windows)
   `RadzenFormField`) makes that pass emit broken code ("compilation unit cannot directly contain members",
   `Parameter` not found). Use `Text`/placeholder instead, or pass the fragment as a child element.
 - Inline `Data="@Enum.GetValues<T>()"` is a Razor error → wrap it: `Data="@(Enum.GetValues<T>())"`.
+- Never `@bind-Value:event="oninput"` on a Radzen input: it compiles but fails at runtime ("ChangeEventArgs cannot be
+  converted to System.String"). For update-while-typing use Radzen's own `Immediate="true"` (RadzenTextBox).
 - `System.IO` isn't imported in Razor files; write `System.IO.Path`.
 - Radzen v12: `RadzenComponents` (dialogs/notifications/tooltips) lives in `MainLayout`; theme CSS is linked
   in `wwwroot/index.html` (`_content/Radzen.Blazor/css/material.css`).
 
 ## Production / deployment
 
-- **Config:** `appsettings.json` next to the exe (`AppConfig.cs`): ConnectionString, BackupFolder (default
+- **Config:** `appsettings.json` next to the exe (`AppConfig.cs`, read once at startup; startup logs it + warns about printers that aren't installed): ConnectionString, ReceiptPrinter, LabelPrinter (Settings → "Printers on this computer": dropdowns of installed printers + Test sample receipt / label; every print screen starts with these), BackupCopyFolder, BackupFolder (default
   `C:\GenZ-POS-Backups`), KeepBackups, AutoBackupDaily. `AppDbContext.DefaultConnectionString` is only the fallback +
-  design-time value. When updating a shop PC never overwrite its `appsettings.json`.
+  design-time value. **Releases do NOT contain appsettings.json (owner 2026-10-26)**: it is `CopyToPublishDirectory=Never`
+  and `publish.ps1` removes it — a release copied over a shop's folder had replaced the shop's file with the developer's
+  (LocalDB / ACER\BARTENDER, database Blazor → GenZPOS), so `Migrate()` quietly created a new, empty database. Instead the
+  csproj target `ShipDefaultSettings` (AfterTargets=Publish) ships it as **`appsettings.default.json`**: on a PC's FIRST
+  start `AppConfig.Load` copies it to `appsettings.json` (so a new client gets the developer's connection string); updates
+  only replace the .default file. No template → built-in defaults are written. `AppConfig.FilePath` = next to the exe, or
+  `C:\ProgramData\GenZ-POS\appsettings.json` when the exe folder can't be written (Program Files). Locally (bin) the
+  project's appsettings.json is copied as usual; `dotnet ef` / Package Manager Console read it too
+  (`DesignTimeDbContextFactory` → `AppConfig.ConnectionStringForTools`, searching up from the current folder). Startup safety check `App.CheckDatabaseChoiceAsync` +
+  `Services/DatabaseGuard.cs`: lists GenZ-POS databases on the server (`__EFMigrationsHistory` + Products + Sales, with
+  counts); configured one missing / empty but another has data → asks (Yes = switch + save to appsettings.json); no
+  GenZ-POS database at all → asks before creating one. Never let Migrate create a database without that check.
+  **Database connection screen (owner 2026-10-26, like the login screen):** `Components/Auth/DatabaseSetup.razor`, shown by
+  `Routes.razor` before the login when `StartupState.ShowSetup` (singleton): automatically when the server can't be reached
+  or refuses the login / database at startup (`App.ReachSqlServerAsync` returns the problem → window opens in
+  `SetupMode`, no DB work done), or from Settings → Database "Change…" (`StartupState.OpenSetup`, Cancel closes it).
+  SQL Server = autocomplete of the servers that answer on this PC (`ConnectionSetup.FindServersAsync`: registry instances
+  + `.`, `.\SQLEXPRESS`, `(localdb)`) or typed (MAINPC\SQLEXPRESS); Windows / SQL login; Connect →
+  `ConnectionSetup.ListDatabasesAsync` (GenZ-POS databases with products / invoices / last sale, friendly errors) → pick
+  one or "A new database" → Save & restart (`ConnectionSetup.Build`, `AppConfig.Save`, `App.Restart` releases the
+  single-instance mutex first).
 - **Startup** (`App.xaml.cs`): fixed culture en-GB + "Rs" → single instance (named mutex) → WebView2 check → config →
   splash → SQL connect retry → pre-upgrade backup if migrations pending → Migrate → ShopInfo/Backup load → window →
   background warm-up + daily auto-backup.

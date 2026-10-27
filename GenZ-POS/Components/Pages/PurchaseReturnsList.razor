@@ -45,7 +45,8 @@
                     }
                 </Template>
             </RadzenDataGridColumn>
-            <RadzenDataGridColumn Title="Supplier"><Template>@context.Supplier?.Name</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Bill #" Width="110px"><Template>@context.Purchase?.BillNo</Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Supplier" MinWidth="160px"><Template>@context.Supplier?.Name</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Total" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Total)</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Cash received" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Received)</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Off balance" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Total - context.Received)</Template></RadzenDataGridColumn>
@@ -114,7 +115,7 @@
         var totals = await q.GroupBy(_ => 1)
             .Select(g => new { Count = g.Count(), Total = g.Sum(x => x.Total), Received = g.Sum(x => x.Received) })
             .FirstOrDefaultAsync();
-        var page = await q.Include(r => r.Supplier).OrderByDescending(r => r.ReturnDate).ThenByDescending(r => r.Id)
+        var page = await q.Include(r => r.Supplier).Include(r => r.Purchase).OrderByDescending(r => r.ReturnDate).ThenByDescending(r => r.Id)
             .Skip(args.Skip ?? 0).Take(args.Top ?? 20).ToListAsync();
 
         if (version != loadVersion) return;

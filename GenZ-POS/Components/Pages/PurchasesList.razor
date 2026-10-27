@@ -47,8 +47,8 @@
         <Columns>
             <RadzenDataGridColumn Property="Id" Title="#" Width="70px" />
             <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.PurchaseDate)</Template></RadzenDataGridColumn>
-            <RadzenDataGridColumn Title="Supplier"><Template>@context.Supplier?.Name</Template></RadzenDataGridColumn>
-            <RadzenDataGridColumn Property="BillNo" Title="Bill #" Width="120px" />
+            <RadzenDataGridColumn Title="Supplier" MinWidth="180px"><Template><strong>@context.Supplier?.Name</strong></Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="BillNo" Title="Bill #" Width="120px" MinWidth="100px" />
             <RadzenDataGridColumn Title="Total" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Total)</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Paid" Width="125px" TextAlign="TextAlign.Right"><Template>@Money(context.Paid)</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Pending" Width="125px" TextAlign="TextAlign.Right">

@@ -9,7 +9,13 @@
    piece (one barcode per piece); tick the ones to print, copies per piece, pick this PC's label printer (remembered in
    appsettings.json), Print. Opens after saving a new purchase; also from Purchases → Labels. Never prints by itself. *@
 <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
-    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Labels · Purchase #@Id</RadzenText>
+    <RadzenStack Gap="0">
+        <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-m-0">Labels · Purchase #@Id</RadzenText>
+        @if (supplierName is not null)
+        {
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" Style="opacity:.75">@supplierName@(billNo is null ? "" : $" · Bill # {billNo}")</RadzenText>
+        }
+    </RadzenStack>
     <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center">
         <RadzenDropDown TValue="string" Data="@printers" @bind-Value="printer" @bind-Value:after="PrinterChanged"
                         Placeholder="Choose label printer" Style="width:240px" title="This PC's label printer (remembered)" />
@@ -35,15 +41,22 @@ else
         <RadzenColumn Size="12" SizeLG="8">
             <RadzenCard>
                 <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" class="rz-mb-2" Wrap="FlexWrap.Wrap">
-                    <RadzenButton Text="Tick all" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => SetAll(true))" />
-                    <RadzenButton Text="Untick all" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => SetAll(false))" />
+                    @* Owner 2026-10-26: find pieces by article no. or barcode (part of it is enough); Tick / Untick and Print work on the rows shown. *@
+                    <RadzenFormField Text="Search article no. or barcode" Style="width:260px">
+                        <Start><RadzenIcon Icon="search" /></Start>
+                        <ChildContent>
+                            <RadzenTextBox @bind-Value="search" Immediate="true" Placeholder="e.g. ART000011 or SH00005" data-enter-skip="true" />
+                        </ChildContent>
+                    </RadzenFormField>
+                    <RadzenButton Text="@(Filtered ? "Tick shown" : "Tick all")" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => SetAll(true))" />
+                    <RadzenButton Text="@(Filtered ? "Untick shown" : "Untick all")" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => SetAll(false))" />
                     <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0" Style="opacity:.7">
-                        Label @Shop.LabelDesign.WidthMm.ToString("0.#") × @Shop.LabelDesign.HeightMm.ToString("0.#") mm · click a row to preview it
+                        @(Filtered ? $"{Shown.Count} of {rows.Count} shown · " : "")                        Label @Shop.LabelDesign.WidthMm.ToString("0.#") × @Shop.LabelDesign.HeightMm.ToString("0.#") mm · click a row to preview it
                     </RadzenText>
                 </RadzenStack>
-                <RadzenDataGrid TItem="LabelRow" Data="@rows" Density="Density.Compact" AllowPaging="false"
+                <RadzenDataGrid TItem="LabelRow" Data="@Shown" Density="Density.Compact" AllowPaging="false"
                                 RowClick="@(a => selected = a.Data)" RowRender="@(a => { if (a.Data == selected) a.Attributes["class"] = "label-row-selected"; })"
-                                EmptyText="This purchase has no items.">
+                                EmptyText="@(Filtered ? "No article no. or barcode matches the search." : "This purchase has no items.")">
                     <Columns>
                         <RadzenDataGridColumn Width="50px" TextAlign="TextAlign.Center">
                             <Template><RadzenCheckBox TValue="bool" @bind-Value="context.Print" /></Template>
@@ -67,7 +80,7 @@ else
             </RadzenCard>
         </RadzenColumn>
         <RadzenColumn Size="12" SizeLG="4">
-            @if ((selected ?? rows.FirstOrDefault()) is { } shown)
+            @if ((selected is not null && Shown.Contains(selected) ? selected : Shown.FirstOrDefault()) is { } shown)
             {
                 <RadzenText TextStyle="TextStyle.Caption" class="rz-mb-1" Style="display:block; text-transform:uppercase; opacity:.6">Preview</RadzenText>
                 <LabelCanvas Design="@Shop.LabelDesign" Label="@shown.Label" PxPerMm="@Math.Min(2.2, 300 / Shop.LabelDesign.HeightMm)" />
@@ -83,6 +96,7 @@ else
 
 @code {
     [Parameter] public int Id { get; set; }
+    private string? supplierName, billNo;
 
     private sealed class LabelRow(LabelData label, int copies)
     {
@@ -92,12 +106,20 @@ else
     }
 
     private List<LabelRow>? rows;
+    private string? search;
+
+    /// <summary>Rows matching the search (article no. or barcode, any part, any case); all rows when it is empty.</summary>
+    private List<LabelRow> Shown => rows is null ? [] : string.IsNullOrWhiteSpace(search) ? rows
+        : rows.Where(r => (r.Label.ArticleNo?.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase) ?? false) ||
+                          r.Label.Barcode.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+
+    private bool Filtered => !string.IsNullOrWhiteSpace(search);
     private LabelRow? selected;
     private IReadOnlyList<string> printers = [];
     private string? printer, message;
     private bool printing, messageIsError;
 
-    private int TotalLabels => rows?.Where(r => r.Print).Sum(r => Math.Max(1, r.Copies)) ?? 0;
+    private int TotalLabels => Shown.Where(r => r.Print).Sum(r => Math.Max(1, r.Copies));
 
     protected override async Task OnInitializedAsync()
     {
@@ -112,6 +134,7 @@ else
                 rows = [];
                 return;
             }
+            (supplierName, billNo) = (purchase.Supplier?.Name, purchase.BillNo);
             // One row per piece (stock item); a line of several (older bills) = that many copies of its barcode.
             rows = purchase.Lines
                 .Where(l => l.StockItem is not null)
@@ -138,7 +161,7 @@ else
 
     private void SetAll(bool print)
     {
-        foreach (var r in rows ?? []) r.Print = print;
+        foreach (var r in Shown) r.Print = print;
     }
 
     /// <summary>Remembers the chosen label printer for this PC (appsettings.json).</summary>
@@ -153,7 +176,7 @@ else
     private async Task PrintAsync()
     {
         if (rows is null || printer is null || printing) return;
-        var labels = rows.Where(r => r.Print).SelectMany(r => Enumerable.Repeat(r.Label, Math.Max(1, r.Copies))).ToList();
+        var labels = Shown.Where(r => r.Print).SelectMany(r => Enumerable.Repeat(r.Label, Math.Max(1, r.Copies))).ToList();
         printing = true;
         message = null;
         try

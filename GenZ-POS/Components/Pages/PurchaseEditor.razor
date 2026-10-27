@@ -16,6 +16,12 @@
             <RadzenButton Text="Export to Excel" Icon="table_view" ButtonStyle="ButtonStyle.Light" Click="ExportAsync"
                           title="This bill as saved (Products layout + Qty); save your changes first" />
         }
+        @if (loaded && !notFound)
+        {
+            @* Owner 2026-10-26: Ctrl+R = start a new purchase again / reload the saved one (asks first when something was entered). *@
+            <RadzenButton Text="@(IsEdit ? "Reload  (Ctrl+R)" : "Clear  (Ctrl+R)")" Icon="restart_alt" ButtonStyle="ButtonStyle.Light" Click="ClearAsync"
+                          data-hotkey="Ctrl+R" title="@(IsEdit ? "Throw away unsaved changes and load the saved bill again" : "Clear this purchase and start again (refreshes items)")" />
+        }
         <RadzenButton Text="Back to purchases" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases"))" />
     </RadzenStack>
 </RadzenStack>
@@ -84,6 +90,10 @@ else
             <RadzenCard class="rz-mb-3 article-card" @key="s.Key">
                 <div class="article-head">
                     <span class="article-title">
+                        @* Expand / collapse the whole article (row, panel and table); collapsed = this heading only. *@
+                        <RadzenButton Icon="@(s.Collapsed ? "expand_more" : "expand_less")" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined"
+                                      Size="ButtonSize.Small" tabindex="-1" class="article-toggle"
+                                      title="@(s.Collapsed ? "Show this article" : "Hide this article")" Click="@(() => s.Collapsed = !s.Collapsed)" />
                         @if (s.ArticleNo is not null)
                         {
                             <strong>@s.ArticleNo</strong>
@@ -97,6 +107,8 @@ else
                     <span class="article-sum">@rows.Count line(s) · @Qty(rows.Sum(l => l.Qty)) @(p?.Unit ?? "pcs") · <strong>@Money(rows.Sum(l => l.Qty * l.Cost))</strong></span>
                 </div>
 
+                @if (!s.Collapsed)
+                {
                 <div class="article-row" data-enter-group="true">
                     <RadzenFormField Text="Item" Style="width:100%">
                         <RadzenDropDown TValue="int?" OpenOnFocus="true" @bind-Value="s.ProductId" @bind-Value:after="@(() => ProductPickedAsync(s))"
@@ -236,6 +248,7 @@ else
                         </Columns>
                     </RadzenDataGrid>
                 }
+                }
             </RadzenCard>
         }
 
@@ -327,6 +340,8 @@ else
         /// <summary>Quantity products: qty to add, in the purchase unit (Bags) or the unit (Kg).</summary>
         public decimal Qty { get; set; } = 1;
         public bool Open { get; set; } = true;
+        /// <summary>Whole card folded to its heading (header arrow).</summary>
+        public bool Collapsed { get; set; }
         public int PanelKey { get; set; }
         /// <summary>Lines whose item is no longer in the list (made inactive): shown here so they stay visible.</summary>
         public bool Orphans { get; init; }
@@ -576,6 +591,36 @@ else
             supplierId = supplier.Id;
             supplierBalance = 0;
         }, $"Supplier \"{n}\" added");
+    }
+
+    /// <summary>
+    /// Clear / Reload (Ctrl+R): a new purchase starts again empty — the pieces made on this screen and not saved are
+    /// deleted again (never used) — and an edited one is loaded again as saved. Asks first when something was entered.
+    /// </summary>
+    private async Task ClearAsync()
+    {
+        var entered = lines.Count > 0 || sections.Any(s => s.ProductId is not null) || !string.IsNullOrWhiteSpace(billNo) || paid > 0;
+        if (entered && !await ConfirmAsync(IsEdit
+                ? $"Throw away your changes and load purchase #{Id} again as it was saved?"
+                : "Clear this purchase and start again? Barcodes made here that aren't saved yet are removed."))
+            return;
+
+        if (!IsEdit)
+        {
+            foreach (var id in newPieces.ToList())
+                await RunAsync(() => StockItems.DeleteNewPieceAsync(id));
+            purchaseDate = DateTime.Today;
+            supplierId = 0;
+            billNo = notes = null;
+            paid = discountValue = 0;
+            discountIsPercent = false;
+        }
+        newPieces.Clear();
+        lines = [];
+        sections = [];
+        oldMultiLines = [];
+        await OnParametersSetAsync(); // fresh items / stock; an edited bill is read again; one empty article card
+        Toast(NotificationSeverity.Info, IsEdit ? $"Purchase #{Id} loaded again" : "New purchase", 2500);
     }
 
     private async Task SaveAsync()

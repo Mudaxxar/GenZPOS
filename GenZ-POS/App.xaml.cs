@@ -58,23 +58,38 @@ public partial class App : Application
         if (cfg.LoadError is not null)
             MessageBox.Show(cfg.LoadError, AppTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
 
+        LogPrinterSettings(cfg);
         var provider = BuildServices(cfg);
         var (splash, status) = CreateSplash();
         splash.Show();
 
+        // Owner 2026-10-26: when the database can't be reached, open the window on the Database connection screen
+        // (Components/Auth/DatabaseSetup.razor) instead of an error box, so the right one can be picked there.
+        string? setupProblem;
         try
         {
-            await WaitForSqlServerAsync(cfg, status);
-            if (!await UpgradeDatabaseAsync(provider, status))
+            setupProblem = await ReachSqlServerAsync(cfg, status);
+            if (setupProblem is null)
             {
-                splash.Close();
-                Shutdown();
-                return;
+                if (!await CheckDatabaseChoiceAsync(cfg, status) || !await UpgradeDatabaseAsync(provider, status))
+                {
+                    splash.Close();
+                    Shutdown();
+                    return;
+                }
+                status.Text = "Opening GenZ-POS…";
+                await provider.GetRequiredService<ShopInfo>().LoadAsync();
+                await provider.GetRequiredService<BackupService>().LoadAsync();
+                await provider.GetRequiredService<AuthService>().EnsureAdminAsync();
             }
-            status.Text = "Opening GenZ-POS…";
-            await provider.GetRequiredService<ShopInfo>().LoadAsync();
-            await provider.GetRequiredService<BackupService>().LoadAsync();
-            await provider.GetRequiredService<AuthService>().EnsureAdminAsync();
+        }
+        catch (Exception ex) when ((ex as SqlException ?? ex.GetBaseException() as SqlException) is { Number: 18456 or 4060 or 4064 } sql)
+        {
+            // The server answered but refused this login / database: pick another connection on the screen.
+            AppLog.Error("Startup: SQL Server refused the connection", ex);
+            setupProblem = sql.Number == 18456
+                ? $"SQL Server \"{cfg.ServerName}\" refused this login. Choose a login that has access, or another server."
+                : $"This login can't open the database \"{cfg.DatabaseName}\" on \"{cfg.ServerName}\". Choose the database (or a login that may open it).";
         }
         catch (Exception ex)
         {
@@ -85,13 +100,21 @@ public partial class App : Application
             return;
         }
 
+        if (setupProblem is not null)
+        {
+            var state = provider.GetRequiredService<StartupState>();
+            state.SetupMode = true;
+            state.Problem = setupProblem;
+        }
+
         var window = new MainWindow(provider);
         MainWindow = window;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         window.Show();
         splash.Close();
 
-        StartBackgroundWork(provider);
+        if (setupProblem is null)
+            StartBackgroundWork(provider);
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -251,9 +274,62 @@ public partial class App : Application
         services.AddScoped<DayClosingService>();
         services.AddScoped<HeldSaleService>();
         services.AddSingleton<ShopInfo>();
+        services.AddSingleton<StartupState>(); // Database connection screen (Components/Auth/DatabaseSetup.razor)
         services.AddSingleton<BackupService>();
 
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>
+    /// Waits for the configured SQL Server (it may still be starting after Windows). Null = reachable; otherwise why not —
+    /// the window then opens on the Database connection screen (owner 2026-10-26), which lists the SQL Servers on this PC.
+    /// </summary>
+    private static async Task<string?> ReachSqlServerAsync(AppConfig cfg, TextBlock status)
+    {
+        try
+        {
+            await WaitForSqlServerAsync(cfg, status);
+            return null;
+        }
+        catch (SqlException ex)
+        {
+            AppLog.Error($"SQL Server \"{cfg.ServerName}\" not reachable", ex);
+            return $"GenZ-POS can't reach SQL Server \"{cfg.ServerName}\" (database \"{cfg.DatabaseName}\"). Choose where this " +
+                   "computer's data is and press Save. If that is already right, the main computer may be off or SQL Server " +
+                   "still starting: wait a minute and press \"Try the saved connection again\".";
+        }
+    }
+
+    /// <summary>The printers from appsettings.json (owner 2026-10-26); a saved one that isn't installed here is logged.</summary>
+    private static void LogPrinterSettings(AppConfig cfg)
+    {
+        var installed = Services.ReceiptPrinter.InstalledPrinters();
+        AppLog.Info($"Settings from {AppConfig.FilePath}: database {cfg.ServerName} / {cfg.DatabaseName}, receipt printer " +
+                    $"\"{cfg.ReceiptPrinter ?? "(Windows default)"}\", label printer \"{cfg.LabelPrinter ?? "(not chosen)"}\"");
+        foreach (var printer in new[] { cfg.ReceiptPrinter, cfg.LabelPrinter })
+            if (!string.IsNullOrWhiteSpace(printer) && !installed.Contains(printer, StringComparer.OrdinalIgnoreCase))
+                AppLog.Warn($"Printer \"{printer}\" from appsettings.json is not installed on this computer");
+    }
+
+    /// <summary>
+    /// Restarts GenZ-POS (after the database connection changed): releases the single-instance lock first, so the new
+    /// process may start, then closes this one.
+    /// </summary>
+    public static void Restart()
+    {
+        try
+        {
+            singleInstance?.ReleaseMutex();
+            singleInstance?.Dispose();
+            singleInstance = null;
+        }
+        catch
+        {
+            // Not held (any more): the new process can start anyway.
+        }
+        if (Environment.ProcessPath is { } exe)
+            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = AppContext.BaseDirectory });
+        Current.Dispatcher.Invoke(() => Current.Shutdown());
     }
 
     /// <summary>Right after Windows starts, SQL Server may still be starting: try a few times before giving up.</summary>
@@ -281,6 +357,86 @@ public partial class App : Application
                 status.Text = $"Waiting for the database (SQL Server) to start…\nTry {attempt + 1} of {SqlConnectTries}";
                 await Task.Delay(SqlRetryDelay);
             }
+        }
+    }
+
+    /// <summary>
+    /// Never start a new, empty database by accident (owner 2026-10-26: after an update GenZ-POS made a new database
+    /// instead of using the shop's — an appsettings.json from another PC had been copied over). When the configured
+    /// database is missing or empty but the server has a GenZ-POS database with data, ask which one to use (the answer
+    /// is saved in appsettings.json); on a server with no GenZ-POS database at all, ask before creating it.
+    /// The DbContext factory reads cfg.ConnectionString lazily, so changing it here is enough. Returns false = close.
+    /// </summary>
+    private static async Task<bool> CheckDatabaseChoiceAsync(AppConfig cfg, TextBlock status)
+    {
+        status.Text = "Looking for the shop's data…";
+        List<ShopDatabase> found;
+        try
+        {
+            found = await DatabaseGuard.FindShopDatabasesAsync(cfg.ConnectionString);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("Could not list the databases on the server; continuing with the configured one", ex);
+            return true;
+        }
+
+        var target = cfg.DatabaseName;
+        var configured = found.FirstOrDefault(d => string.Equals(d.Name, target, StringComparison.OrdinalIgnoreCase));
+        if (configured is { HasData: true })
+            return true; // the normal case: the shop's database, with its data
+
+        var withData = found.Where(d => d.HasData && !string.Equals(d.Name, target, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => d.LastSale ?? DateTime.MinValue).ThenByDescending(d => d.Products + d.Sales).ToList();
+        if (withData.Count > 0)
+        {
+            var best = withData[0];
+            var others = withData.Count > 1
+                ? "\n\nOther databases with data: " + string.Join("; ", withData.Skip(1).Select(d => d.Describe))
+                : "";
+            var answer = MessageBox.Show(
+                $"GenZ-POS is set to use the database \"{target}\" on SQL Server \"{cfg.ServerName}\", but " +
+                (configured is null ? "it does not exist." : "it is empty.") +
+                $"\n\nThe shop's data was found in:\n   {best.Describe}{others}" +
+                $"\n\nYes  = use \"{best.Name}\" (recommended; remembered from now on)" +
+                $"\nNo  = use \"{target}\" anyway ({(configured is null ? "a NEW, EMPTY database is created" : "it has no data")})" +
+                "\nCancel = close GenZ-POS",
+                AppTitle, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Yes);
+            if (answer == MessageBoxResult.Cancel)
+                return false;
+            if (answer == MessageBoxResult.Yes)
+            {
+                cfg.ConnectionString = DatabaseGuard.WithDatabase(cfg.ConnectionString, best.Name);
+                AppLog.Info($"Database switched from \"{target}\" to \"{best.Name}\" (the configured one was {(configured is null ? "missing" : "empty")})");
+                SaveConfig(cfg);
+            }
+            return true;
+        }
+
+        if (configured is null)
+        {
+            // A brand-new shop: no GenZ-POS database on this server yet.
+            var create = MessageBox.Show(
+                $"No GenZ-POS data was found on SQL Server \"{cfg.ServerName}\".\n\n" +
+                $"Create a new, empty database \"{target}\" now?\n\n" +
+                $"Choose No if this PC should use data that is somewhere else; then set the ConnectionString in\n{AppConfig.FilePath}",
+                AppTitle, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+            if (create != MessageBoxResult.Yes)
+                return false;
+            AppLog.Info($"Creating a new database \"{target}\" on {cfg.ServerName} (none found)");
+        }
+        return true;
+    }
+
+    private static void SaveConfig(AppConfig cfg)
+    {
+        try { cfg.Save(); }
+        catch (Exception ex)
+        {
+            AppLog.Error("Could not save appsettings.json", ex);
+            MessageBox.Show($"GenZ-POS could not save its settings file ({AppConfig.FilePath}): {ex.Message}\n\n" +
+                            "It works for now, but will ask again next time. Ask a technician to make that file writable.",
+                AppTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 

@@ -458,3 +458,8 @@ html, body {
 .rz-data-grid {
     max-width: 100%;
 }
+
+/* Database connection screen (Components/Auth/DatabaseSetup.razor): the login card, a bit wider. */
+.auth-card.setup-card {
+    max-width: 560px;
+}

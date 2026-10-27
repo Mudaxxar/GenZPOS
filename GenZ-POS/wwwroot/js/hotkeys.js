@@ -1,6 +1,7 @@
 // Function-key shortcuts for till-style screens.
-// Mark an element with data-hotkey="F9": buttons are clicked, fields are focused
-// (a dropdown with OpenOnFocus opens; for wrappers like RadzenNumeric the inner input gets focus).
+// Mark an element with data-hotkey="F9" (or a Ctrl combination, e.g. data-hotkey="Ctrl+R"): buttons are clicked,
+// fields are focused (a dropdown with OpenOnFocus opens; for wrappers like RadzenNumeric the inner input gets focus).
+// A Ctrl combination only counts when the screen has an element for it, so Ctrl+C / Ctrl+V keep working everywhere else.
 (function () {
     const KEYS = ['F1', 'F2', 'F3', 'F4', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11'];
 
@@ -13,14 +14,22 @@
         return el.querySelector('input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])');
     }
 
+    // "F9", or "Ctrl+R" (letter in upper case), for the key pressed; null when it can't be a hotkey.
+    function hotkeyName(e) {
+        if (e.altKey || e.metaKey) return null;
+        if (e.ctrlKey) return e.key.length === 1 ? 'Ctrl+' + e.key.toUpperCase() : null;
+        return KEYS.includes(e.key) ? e.key : null;
+    }
+
     document.addEventListener('keydown', function (e) {
-        if (!KEYS.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey) return;
+        const name = hotkeyName(e);
+        if (!name) return;
 
         // Inside an open dialog, only that dialog's hotkeys count.
         const dialogs = [...document.querySelectorAll('.rz-dialog')].filter(visible);
         const scope = dialogs.length ? dialogs[dialogs.length - 1] : document;
 
-        const el = [...scope.querySelectorAll(`[data-hotkey="${e.key}"]`)].find(visible);
+        const el = [...scope.querySelectorAll(`[data-hotkey="${name}"]`)].find(visible);
         if (!el) return;
 
         e.preventDefault();

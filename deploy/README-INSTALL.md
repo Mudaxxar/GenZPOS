@@ -33,7 +33,13 @@ You do **not** need to install .NET or anything else. The program folder already
 
 ### Step 3: Only if your SQL Server is called SQLEXPRESS
 
-1. Open `C:\GenZ-POS\appsettings.json` with **Notepad**.
+The program folder has no `appsettings.json`, only `appsettings.default.json`. The first time GenZ-POS starts, it
+copies that file to `appsettings.json` and uses it from then on, so installing a new version can never replace your
+settings. (If Windows doesn't allow writing in the program folder, the file is made in `C:\ProgramData\GenZ-POS\` instead.
+Settings & Backup shows where it is.)
+
+1. Start GenZ-POS once. It will say it can't reach the database; that's fine. Then open the new
+   `C:\GenZ-POS\appsettings.json` with **Notepad**.
 2. Change `Server=.;` to `Server=.\\SQLEXPRESS;`. Type the backslash **twice**, exactly as shown.
 3. Save and close Notepad.
 
@@ -101,7 +107,10 @@ Before it restores, restore.cmd saves a copy of the current data (`…_before-re
 1. Close GenZ-POS on **every** computer.
 2. Rename `C:\GenZ-POS` to `C:\GenZ-POS-old`.
 3. Copy the new **GenZ-POS** folder to `C:\`.
-4. Copy **appsettings.json** from `C:\GenZ-POS-old` into `C:\GenZ-POS` and choose **Replace**. This keeps your settings.
+4. Copy **appsettings.json** from `C:\GenZ-POS-old` into `C:\GenZ-POS`. This keeps this computer's settings (database,
+   printers, backup copy folder). New versions don't contain an appsettings.json, so they can never replace yours.
+   If you forget this step, GenZ-POS finds the shop's database on SQL Server by itself and asks before using it. It never
+   quietly starts a new, empty database.
 5. Start GenZ-POS on the main computer first. If the new version needs to update the database, it saves a `_pre-upgrade` backup first and then updates the database.
 6. When everything works, you can delete `C:\GenZ-POS-old`.
 

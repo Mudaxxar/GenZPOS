@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10251f">
+  <title>HangarStock — Inventory concept</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18251f;
+      --muted: #758078;
+      --line: #e7ebe6;
+      --canvas: #f5f7f4;
+      --white: #fff;
+      --green: #1c714e;
+      --green-dark: #10251f;
+      --green-soft: #e8f4ed;
+      --orange: #ad6713;
+      --orange-soft: #fff2df;
+      --red: #b8443d;
+      --red-soft: #fdecea;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--canvas); }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 246px minmax(0, 1fr); }
+    aside {
+      position: sticky; top: 0; height: 100vh; padding: 23px 16px;
+      display: flex; flex-direction: column; background: var(--green-dark); color: #e8f0eb;
+    }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 9px 29px; }
+    .brand-mark {
+      width: 37px; height: 37px; display: grid; place-items: center; border-radius: 12px;
+      color: #12352a; background: #b8e1c8;
+    }
+    .brand-name { font-size: 16px; font-weight: 750; letter-spacing: -.35px; }
+    .brand-caption { margin-top: 2px; color: #9aaea3; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; }
+    .workspace-label { padding: 0 10px 10px; color: #90a69a; font-size: 10px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase; }
+    .nav { display: grid; gap: 4px; }
+    .nav button {
+      display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 11px;
+      border: 0; border-radius: 8px; text-align: left; color: #c4d1c9; background: transparent; font-size: 13px;
+    }
+    .nav button:hover, .nav button.active { color: #fff; background: #294438; }
+    .nav svg { width: 17px; height: 17px; opacity: .87; }
+    .nav .count { margin-left: auto; color: #a9b9af; font-size: 11px; }
+    .side-rule { height: 1px; margin: 19px 7px; background: #30453b; }
+    .side-bottom { margin-top: auto; }
+    .sync-card { margin: 0 5px 15px; padding: 12px; border: 1px solid #334b3e; border-radius: 10px; background: #1a3026; }
+    .sync-title { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 650; }
+    .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #64cc8b; }
+    .sync-note { margin: 6px 0 0 14px; color: #9db0a4; font-size: 10px; }
+    .profile { display: flex; align-items: center; gap: 10px; padding: 13px 7px 0; border-top: 1px solid #30453b; }
+    .avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; color: #19392d; background: #d2e8d8; font-size: 11px; font-weight: 750; }
+    .profile-name { font-size: 12px; font-weight: 650; }
+    .profile-role { margin-top: 3px; color: #9db0a4; font-size: 10px; }
+    main { min-width: 0; }
+    .topbar {
+      height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
+      padding: 0 34px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.88);
+    }
+    .crumb { color: var(--muted); font-size: 12px; }
+    .crumb strong { color: var(--ink); font-weight: 650; }
+    .top-actions { display: flex; align-items: center; gap: 10px; }
+    .icon-button { width: 35px; height: 35px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; color: #58645d; background: white; }
+    .icon-button svg { width: 16px; height: 16px; }
+    .help-link { color: #68756d; text-decoration: none; font-size: 12px; }
+    .content { max-width: 1440px; margin: 0 auto; padding: 29px 34px 45px; }
+    .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+    h1 { margin: 0; font-size: 25px; letter-spacing: -.7px; }
+    .subtitle { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+    .heading-actions { display: flex; gap: 9px; }
+    .button {
+      min-height: 37px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 0 13px; border: 1px solid #dfe5df; border-radius: 8px; color: #39473f; background: white;
+      font-size: 12px; font-weight: 650;
+    }
+    .button:hover { background: #f8faf8; }
+    .button.primary { border-color: var(--green); color: white; background: var(--green); }
+    .button.primary:hover { background: #175d40; }
+    .button svg { width: 15px; height: 15px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin: 25px 0 24px; }
+    .metric { padding: 16px 17px; border: 1px solid var(--line); border-radius: 11px; background: white; }
+    .metric-top { display: flex; align-items: center; justify-content: space-between; color: #69756d; font-size: 11px; font-weight: 600; }
+    .metric-icon { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px; color: var(--green); background: #eff6f1; }
+    .metric-icon svg { width: 15px; height: 15px; }
+    .metric-value { margin-top: 11px; font-size: 23px; font-weight: 730; letter-spacing: -.5px; }
+    .metric-foot { margin-top: 4px; color: #8a948d; font-size: 10px; }
+    .metric-foot em { color: var(--green); font-style: normal; font-weight: 650; }
+    .inventory { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; }
+    .inventory-head { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 17px 18px; border-bottom: 1px solid var(--line); }
+    .inventory-title { font-size: 14px; font-weight: 700; }
+    .inventory-subtitle { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .inventory-tools { display: flex; align-items: center; gap: 8px; }
+    .search { position: relative; width: min(285px, 30vw); }
+    .search svg { position: absolute; top: 10px; left: 11px; width: 15px; height: 15px; color: #89948c; }
+    .search input { width: 100%; height: 36px; padding: 0 11px 0 34px; border: 1px solid #e2e7e2; border-radius: 8px; outline: 0; color: var(--ink); font-size: 11px; }
+    .search input:focus, .field input:focus, .field select:focus, .field textarea:focus { border-color: #8bb79b; box-shadow: 0 0 0 3px #e8f4ed; }
+    .filter-button { height: 36px; padding: 0 10px; }
+    .view-switch { display: flex; padding: 3px; border: 1px solid #e2e7e2; border-radius: 8px; background: #f8f9f7; }
+    .view-switch button { width: 29px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 6px; color: #738078; background: transparent; }
+    .view-switch button.selected { color: var(--green); background: white; box-shadow: 0 1px 3px #14231c1a; }
+    .view-switch svg { width: 15px; height: 15px; }
+    .filters { display: flex; align-items: center; gap: 8px; padding: 11px 18px; border-bottom: 1px solid var(--line); }
+    .filter-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid #e8ece8; border-radius: 7px; color: #59665e; background: white; font-size: 10px; }
+    .filter-chip.current { border-color: #d4e7da; color: #216344; background: #f1f8f3; }
+    .filter-chip .tiny-dot { width: 6px; height: 6px; border-radius: 50%; background: #39905e; }
+    .filter-caption { margin-left: auto; color: #89938c; font-size: 10px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; }
+    thead { background: #fbfcfb; }
+    th { padding: 10px 13px; border-bottom: 1px solid var(--line); color: #808b83; font-size: 9px; font-weight: 700; letter-spacing: .65px; text-transform: uppercase; }
+    td { padding: 12px 13px; border-bottom: 1px solid #eef1ee; color: #536057; font-size: 11px; }
+    tbody tr { transition: background .12s; cursor: pointer; }
+    tbody tr:hover { background: #f9fbf9; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .item-cell { display: flex; align-items: center; gap: 10px; min-width: 220px; }
+    .item-thumb { width: 38px; height: 38px; flex: none; display: grid; place-items: center; border: 1px solid #e8ece8; border-radius: 8px; color: #53665b; background: linear-gradient(145deg,#f4f6f2,#e6ede6); }
+    .item-thumb svg { width: 20px; height: 20px; }
+    .item-name { color: #25332b; font-size: 11px; font-weight: 680; }
+    .item-sub { margin-top: 4px; color: #879189; font-size: 9px; }
+    .code { color: #39473f; font-size: 10px; font-weight: 650; letter-spacing: .15px; }
+    .subcode { margin-top: 4px; color: #909992; font-size: 9px; }
+    .status { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 20px; font-size: 9px; font-weight: 700; }
+    .status::before { width: 6px; height: 6px; border-radius: 50%; content: ""; background: currentColor; }
+    .status.available { color: #267348; background: var(--green-soft); }
+    .status.reserved { color: var(--orange); background: var(--orange-soft); }
+    .status.sold { color: var(--red); background: var(--red-soft); }
+    .price { color: #2d3931; font-weight: 650; }
+    .row-menu { border: 0; color: #8b958e; background: transparent; font-size: 17px; }
+    .table-footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 17px; border-top: 1px solid var(--line); color: #78837b; font-size: 10px; }
+    .pagination { display: flex; align-items: center; gap: 5px; }
+    .page-btn { min-width: 27px; height: 27px; border: 1px solid #e5e9e5; border-radius: 6px; color: #647168; background: white; font-size: 10px; }
+    .page-btn.current { border-color: #d2e5d8; color: var(--green); background: #eff7f1; }
+    .gallery { display: none; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; padding: 16px; }
+    .gallery-card { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+    .gallery-art { height: 125px; display: grid; place-items: center; color: #75877a; background: linear-gradient(135deg,#eef2ec,#e1e9e1); }
+    .gallery-art svg { width: 48px; height: 48px; }
+    .gallery-info { padding: 11px; }
+    .gallery-info .item-name { font-size: 12px; }
+    .gallery-info .status { margin-top: 9px; }
+    .empty { display: none; padding: 38px; color: #7c887f; text-align: center; font-size: 12px; }
+    .footnote { margin: 15px 2px 0; color: #8b948d; font-size: 10px; }
+    .modal-backdrop { position: fixed; inset: 0; z-index: 5; display: none; align-items: center; justify-content: center; padding: 18px; background: #10251f66; }
+    .modal-backdrop.open { display: flex; }
+    .modal { width: min(650px,100%); max-height: 92vh; overflow: auto; border-radius: 13px; background: white; box-shadow: 0 20px 60px #10251f30; }
+    .modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px 16px; border-bottom: 1px solid var(--line); }
+    .modal-head h2 { margin: 0; font-size: 17px; }
+    .modal-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .close { width: 30px; height: 30px; border: 0; border-radius: 7px; color: #657168; background: #f3f5f3; font-size: 19px; line-height: 1; }
+    .form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; padding: 19px 22px; }
+    .field { display: grid; gap: 6px; min-width: 0; }
+    .field.full { grid-column: 1/-1; }
+    .field label { color: #4b594f; font-size: 10px; font-weight: 650; }
+    .field input, .field select, .field textarea { width: 100%; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid #e1e7e1; border-radius: 7px; outline: 0; color: #344239; background: white; font-size: 11px; }
+    .field textarea { height: 68px; padding-top: 9px; resize: vertical; }
+    .upload { display: flex; align-items: center; justify-content: center; min-height: 65px; border: 1px dashed #cdd8cf; border-radius: 8px; color: #68766c; background: #fbfcfb; font-size: 10px; }
+    .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 22px; border-top: 1px solid var(--line); }
+    .detail-content { padding: 20px 22px; }
+    .detail-banner { display: flex; align-items: center; gap: 13px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+    .detail-banner .item-thumb { width: 58px; height: 58px; }
+    .detail-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 17px 22px; padding-top: 18px; }
+    .detail-field span { display: block; margin-bottom: 5px; color: #879189; font-size: 9px; text-transform: uppercase; letter-spacing: .5px; }
+    .detail-field strong { color: #334138; font-size: 11px; font-weight: 620; }
+    .toast { position: fixed; right: 22px; bottom: 22px; z-index: 8; display: none; padding: 12px 16px; border-radius: 9px; color: white; background: #183a2c; box-shadow: 0 8px 25px #10251f2e; font-size: 12px; }
+    .toast.show { display: block; animation: fade-in .2s ease-out; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+    @media (max-width: 1000px) {
+      .app { grid-template-columns: 205px minmax(0,1fr); }
+      .topbar { padding: 0 22px; }
+      .content { padding: 24px 22px 35px; }
+      .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .gallery { grid-template-columns: repeat(2,minmax(0,1fr)); }
+    }
+    @media (max-width: 720px) {
+      .app { display: block; }
+      aside { position: static; width: 100%; height: auto; padding: 10px 13px; }
+      .brand { padding: 0 3px; }
+      .brand-mark { width: 32px; height: 32px; }
+      .workspace-label, .side-rule, .side-bottom { display: none; }
+      .nav { display: flex; overflow-x: auto; gap: 5px; padding-top: 10px; }
+      .nav button { width: auto; flex: none; padding: 8px 10px; font-size: 11px; }
+      .nav button:not(.active) { background: #1a3026; }
+      .nav svg { width: 14px; height: 14px; }
+      .nav .count { display: none; }
+      .topbar { height: 50px; padding: 0 15px; }
+      .content { padding: 22px 14px 30px; }
+      .heading { align-items: flex-start; }
+      h1 { font-size: 22px; }
+      .heading-actions .button:not(.primary) { display: none; }
+      .button { min-height: 35px; padding: 0 10px; }
+      .metrics { gap: 8px; margin: 18px 0; }
+      .metric { padding: 12px; }
+      .metric-value { font-size: 20px; }
+      .inventory-head { align-items: flex-start; flex-direction: column; padding: 14px; }
+      .inventory-tools { width: 100%; }
+      .search { width: auto; flex: 1; }
+      .filter-button { padding: 0 8px; }
+      .filters { overflow-x: auto; padding: 10px 14px; }
+      .filter-caption { display: none; }
+      .table-wrap { display: block; }
+      table { min-width: 770px; }
+      .table-footer { padding: 11px 12px; }
+      .gallery { padding: 10px; gap: 8px; }
+      .gallery-art { height: 95px; }
+    }
+    @media (max-width: 420px) {
+      .help-link { display: none; }
+      .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .metric-top { font-size: 10px; }
+      .metric-icon { width: 25px; height: 25px; }
+      .gallery { grid-template-columns: 1fr 1fr; }
+      .form-grid, .detail-grid { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="21" height="21"><path d="M3 13.5 21 6l-7.5 18-2.2-8.3L3 13.5Z" stroke-linejoin="round"/><path d="m11.3 15.7 4.6-4.6" stroke-linecap="round"/></svg>
+        </div>
+        <div><div class="brand-name">HangarStock</div><div class="brand-caption">Parts inventory</div></div>
+      </div>
+      <div class="workspace-label">Workspace</div>
+      <nav class="nav" aria-label="Main navigation">
+        <button class="active" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>Inventory <span class="count">1,284</span></button>
+        <button type="button" data-notice="Reports are part of the proposed system."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V5m0 14h17"/><path d="m7 15 4-4 3 2 6-7"/></svg>Reports</button>
+        <button type="button" data-notice="The category manager is an example of the planned admin tools."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v5H4zM14 15h6v5h-6z"/></svg>Categories</button>
+        <button type="button" data-notice="Team access settings are represented in this concept."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM20 8v6m3-3h-6"/></svg>Team access</button>
+      </nav>
+      <div class="side-rule"></div>
+      <div class="workspace-label">Browse by category</div>
+      <nav class="nav" aria-label="Inventory categories">
+        <button type="button" data-category="All"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>All categories</button>
+        <button type="button" data-category="Engine Parts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 10h3l2-3h6l2 3h3v8h-3l-2 2H9l-2-2H4zM2 12v4m20-4v4M9 7V4h6v3"/></svg>Engine parts <span class="count">426</span></button>
+        <button type="button" data-category="Avionics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8m-8 4h3m2 0h3"/></svg>Avionics <span class="count">218</span></button>
+        <button type="button" data-category="Propellers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="2"/><path d="M11 10c-2-3-3-7-1-8 2-1 4 2 3 8m1 3c3 2 6 5 5 7-1 2-5 0-7-6m-3-1c-3 2-7 3-8 1-1-2 2-4 8-3"/></svg>Propellers <span class="count">92</span></button>
+        <button type="button" data-category="Electrical"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M13 2 4 14h7l-1 8 10-13h-7z" stroke-linejoin="round"/></svg>Electrical <span class="count">174</span></button>
+        <button type="button" data-category="Other"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>Other categories</button>
+      </nav>
+      <div class="side-bottom">
+        <div class="sync-card"><div class="sync-title"><span class="sync-dot"></span>All changes synced</div><div class="sync-note">Last backup today at 02:00 AM</div></div>
+        <div class="profile"><div class="avatar">JD</div><div><div class="profile-name">Jordan Davis</div><div class="profile-role">Administrator</div></div></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="crumb">Workspace <span aria-hidden="true">/</span> <strong>Inventory</strong></div>
+        <div class="top-actions">
+          <a class="help-link" href="#" id="help-link">Help center</a>
+          <button class="icon-button" type="button" aria-label="Notifications" id="notifications">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12h4"/></svg>
+          </button>
+          <div class="avatar" title="Jordan Davis">JD</div>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="heading">
+          <div><h1>Inventory</h1><p class="subtitle">Find, manage, and track your aircraft parts.</p></div>
+          <div class="heading-actions">
+            <button class="button" id="export-button" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v4h14v-4"/></svg>Export</button>
+            <button class="button primary" id="add-button" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Add item</button>
+          </div>
+        </div>
+
+        <div class="metrics">
+          <article class="metric"><div class="metric-top"><span>Total records</span><span class="metric-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/></svg></span></div><div class="metric-value" id="total-count">1,284</div><div class="metric-foot"><em>+18</em> added this month</div></article>
+          <article class="metric"><div class="metric-top"><span>Available</span><span class="metric-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12 4 4L19 6"/></svg></span></div><div class="metric-value">1,096</div><div class="metric-foot">Ready for sale</div></article>
+          <article class="metric"><div class="metric-top"><span>Reserved</span><span class="metric-icon" style="color:#ad6713;background:#fff4e6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span></div><div class="metric-value">42</div><div class="metric-foot">Awaiting collection</div></article>
+          <article class="metric"><div class="metric-top"><span>Sold this month</span><span class="metric-icon" style="color:#b8443d;background:#fff0ee"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16l-1 13H5L4 7ZM9 7a3 3 0 0 1 6 0M9 12v4m6-4v4"/></svg></span></div><div class="metric-value">37</div><div class="metric-foot">Across all categories</div></article>
+        </div>
+
+        <section class="inventory" aria-label="Inventory records">
+          <div class="inventory-head">
+            <div><div class="inventory-title">Parts &amp; equipment</div><div class="inventory-subtitle">Showing available items first · records are never removed when sold</div></div>
+            <div class="inventory-tools">
+              <label class="search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+                <input id="search-input" type="search" placeholder="Search part no., serial, keyword…" aria-label="Search inventory">
+              </label>
+              <button class="button filter-button" id="status-filter" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h16M7 12h10m-7 6h4"/></svg><span id="filter-label">Available</span></button>
+              <div class="view-switch" aria-label="View style">
+                <button class="selected" id="table-view" aria-label="Table view" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M9 9v11m6-11v11"/></svg></button>
+                <button id="gallery-view" aria-label="Gallery view" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg></button>
+              </div>
+            </div>
+          </div>
+          <div class="filters">
+            <button class="filter-chip current" type="button" data-status="Available"><span class="tiny-dot"></span>Available <strong>1,096</strong></button>
+            <button class="filter-chip" type="button" data-status="Reserved">Reserved <strong>42</strong></button>
+            <button class="filter-chip" type="button" data-status="Sold">Sold <strong>146</strong></button>
+            <button class="filter-chip" type="button" data-status="All">All items <strong>1,284</strong></button>
+            <span class="filter-caption">Updated just now</span>
+          </div>
+          <div class="table-wrap" id="table-wrap">
+            <table>
+              <thead><tr><th>Item</th><th>Part number</th><th>Serial no.</th><th>Category</th><th>Condition</th><th>Status</th><th>Location</th><th>Asking price</th><th></th></tr></thead>
+              <tbody id="inventory-rows"></tbody>
+            </table>
+          </div>
+          <div class="gallery" id="gallery"></div>
+          <div class="empty" id="empty-state">No items match your search. Try another part number or keyword.</div>
+          <div class="table-footer"><span id="result-count">Showing 1–5 of 1,096 available items</span><div class="pagination"><button class="page-btn" type="button" aria-label="Previous page">‹</button><button class="page-btn current" type="button">1</button><button class="page-btn" type="button">2</button><button class="page-btn" type="button">3</button><span>…</span><button class="page-btn" type="button">›</button></div></div>
+        </section>
+        <p class="footnote">Concept preview · Sample data only · Final fields, categories, permissions, and backup settings to be confirmed.</p>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
+    <form class="modal" id="add-form">
+      <div class="modal-head"><div><h2 id="add-title">Add inventory item</h2><p>Create a new part record. The inventory ID is generated automatically.</p></div><button class="close" type="button" data-close aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <div class="field"><label for="category">Category</label><select id="category"><option>Engine Parts</option><option>Complete Engines</option><option>Engine Accessories</option><option>Propellers</option><option>Avionics</option><option>Electrical</option><option>Instruments</option><option>Airframe</option><option>Landing Gear</option><option>Cabin / Interior</option><option>Hardware</option><option>Tools / Equipment</option><option>Miscellaneous</option></select></div>
+        <div class="field"><label for="manufacturer">Manufacturer</label><input id="manufacturer" placeholder="e.g. Lycoming"></div>
+        <div class="field"><label for="description">Description</label><input id="description" placeholder="Part name or description" required></div>
+        <div class="field"><label for="part-number">Part number</label><input id="part-number" placeholder="e.g. LW-12345"></div>
+        <div class="field"><label for="serial-number">Serial number</label><input id="serial-number" placeholder="If applicable"></div>
+        <div class="field"><label for="condition">Condition</label><select id="condition"><option>New</option><option>Overhauled</option><option>Serviceable</option><option>As removed</option><option>For parts</option></select></div>
+        <div class="field"><label for="location">Location</label><input id="location" placeholder="Building / shelf / bin"></div>
+        <div class="field"><label for="price">Asking price (USD)</label><input id="price" type="number" min="0" step="0.01" placeholder="0.00"></div>
+        <div class="field full"><label>Photos and documents</label><div class="upload">Drop photos or PDFs here, or choose files</div></div>
+        <div class="field full"><label for="notes">Notes</label><textarea id="notes" placeholder="Optional details, history, or notes"></textarea></div>
+      </div>
+      <div class="modal-foot"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">Save item</button></div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop" id="detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="modal">
+      <div class="modal-head"><div><h2 id="detail-title">Item details</h2><p>Review this inventory record.</p></div><button class="close" type="button" data-close aria-label="Close">×</button></div>
+      <div class="detail-content" id="detail-content"></div>
+      <div class="modal-foot"><button class="button" type="button" data-close>Close</button><button class="button primary" type="button" id="edit-button">Edit item</button></div>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+
+  <script>
+    const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 14.5h2l2-4h7l2 4h3v4h-2a2 2 0 0 1-4 0h-4a2 2 0 0 1-4 0H4zM8 10.5l1.5-4h5l2 4M2 15h2m16 0h2M9 6.5V4h6v2.5"/></svg>';
+    let items = [
+      {id:"AV-001284",name:"Cylinder Assembly, 0-360 Series",manufacturer:"Lycoming",part:"LW-12345",serial:"L-89431-21",category:"Engine Parts",condition:"Overhauled",status:"Available",location:"Main · A-03-12",price:"$4,850.00",notes:"Overhauled in 2023. Logbook copy attached."},
+      {id:"AV-001283",name:"GPS / WAAS Navigator",manufacturer:"Garmin",part:"GTN 650Xi",serial:"3JX019847",category:"Avionics",condition:"Serviceable",status:"Available",location:"Annex · C-01-04",price:"$8,200.00",notes:"Includes tray and connector. Bench tested."},
+      {id:"AV-001282",name:"Propeller Blade, Hartzell",manufacturer:"Hartzell",part:"HC-C2YK-1BF",serial:"KX39218",category:"Propellers",condition:"Serviceable",status:"Reserved",location:"Main · P-02-08",price:"$1,950.00",notes:"Reserved pending collection."},
+      {id:"AV-001281",name:"Alternator, 12V 60A",manufacturer:"Plane-Power",part:"AL12-EI60",serial:"PP-441709",category:"Electrical",condition:"New",status:"Available",location:"Main · E-04-02",price:"$975.00",notes:"New in box."},
+      {id:"AV-001280",name:"Attitude Indicator",manufacturer:"BendixKing",part:"KI-256",serial:"A193862",category:"Instruments",condition:"As removed",status:"Sold",location:"Main · I-01-11",price:"$1,100.00",notes:"Sold October 18. Invoice INV-2026-104."}
+    ];
+    let selectedStatus = "Available";
+    let selectedCategory = "All";
+    let activeItem = null;
+    const rows = document.getElementById("inventory-rows");
+    const gallery = document.getElementById("gallery");
+    const searchInput = document.getElementById("search-input");
+    const statusClass = value => value.toLowerCase();
+    const formatPrice = value => value || "—";
+
+    function visibleItems() {
+      const query = searchInput.value.trim().toLowerCase();
+      return items.filter(item => {
+        const matchesStatus = selectedStatus === "All" || item.status === selectedStatus;
+        const matchesCategory = selectedCategory === "All" || item.category === selectedCategory;
+        const matchesQuery = !query || Object.values(item).join(" ").toLowerCase().includes(query);
+        return matchesStatus && matchesCategory && matchesQuery;
+      });
+    }
+    function render() {
+      const found = visibleItems();
+      rows.innerHTML = "";
+      gallery.innerHTML = "";
+      found.forEach(item => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td><div class="item-cell"><div class="item-thumb">${icon}</div><div><div class="item-name">${escapeHtml(item.name)}</div><div class="item-sub">${escapeHtml(item.manufacturer)} · ${escapeHtml(item.id)}</div></div></div></td>
+          <td><div class="code">${escapeHtml(item.part || "—")}</div></td><td><div class="code">${escapeHtml(item.serial || "—")}</div></td>
+          <td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.condition)}</td><td><span class="status ${statusClass(item.status)}">${escapeHtml(item.status)}</span></td>
+          <td>${escapeHtml(item.location || "—")}</td><td class="price">${escapeHtml(formatPrice(item.price))}</td><td><button class="row-menu" aria-label="Open item details">···</button></td>`;
+        tr.addEventListener("click", () => openDetails(item));
+        rows.appendChild(tr);
+        const card = document.createElement("article");
+        card.className = "gallery-card";
+        card.innerHTML = `<div class="gallery-art">${icon}</div><div class="gallery-info"><div class="item-name">${escapeHtml(item.name)}</div><div class="item-sub">${escapeHtml(item.part || item.id)} · ${escapeHtml(item.location || "No location")}</div><span class="status ${statusClass(item.status)}">${escapeHtml(item.status)}</span><span class="price" style="float:right">${escapeHtml(formatPrice(item.price))}</span></div>`;
+        card.addEventListener("click", () => openDetails(item));
+        gallery.appendChild(card);
+      });
+      document.getElementById("empty-state").style.display = found.length ? "none" : "block";
+      document.getElementById("result-count").textContent = found.length
+        ? `Showing 1–${found.length} of ${selectedStatus === "All" ? "1,284" : selectedStatus === "Available" ? "1,096" : selectedStatus === "Reserved" ? "42" : "146"} ${selectedStatus.toLowerCase()} items`
+        : "No matching items";
+    }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+    }
+    function toast(message) {
+      const element = document.getElementById("toast");
+      element.textContent = message;
+      element.classList.add("show");
+      window.setTimeout(() => element.classList.remove("show"), 2600);
+    }
+    function showModal(id) { document.getElementById(id).classList.add("open"); }
+    function closeModals() { document.querySelectorAll(".modal-backdrop").forEach(el => el.classList.remove("open")); }
+    function openDetails(item) {
+      activeItem = item;
+      document.getElementById("detail-title").textContent = item.name;
+      document.getElementById("detail-content").innerHTML = `<div class="detail-banner"><div class="item-thumb">${icon}</div><div><div class="item-name">${escapeHtml(item.name)}</div><div class="item-sub">${escapeHtml(item.manufacturer)} · ${escapeHtml(item.id)}</div><span class="status ${statusClass(item.status)}" style="margin-top:8px">${escapeHtml(item.status)}</span></div></div>
+        <div class="detail-grid"><div class="detail-field"><span>Part number</span><strong>${escapeHtml(item.part || "—")}</strong></div><div class="detail-field"><span>Serial number</span><strong>${escapeHtml(item.serial || "—")}</strong></div><div class="detail-field"><span>Category</span><strong>${escapeHtml(item.category)}</strong></div><div class="detail-field"><span>Condition</span><strong>${escapeHtml(item.condition)}</strong></div><div class="detail-field"><span>Location</span><strong>${escapeHtml(item.location || "—")}</strong></div><div class="detail-field"><span>Asking price</span><strong>${escapeHtml(formatPrice(item.price))}</strong></div><div class="detail-field"><span>Notes</span><strong>${escapeHtml(item.notes || "—")}</strong></div><div class="detail-field"><span>Attachments</span><strong>Photos and PDFs appear here</strong></div></div>`;
+      showModal("detail-modal");
+    }
+    document.getElementById("add-button").addEventListener("click", () => showModal("add-modal"));
+    document.querySelectorAll("[data-close]").forEach(button => button.addEventListener("click", closeModals));
+    document.querySelectorAll(".modal-backdrop").forEach(backdrop => backdrop.addEventListener("click", event => { if (event.target === backdrop) closeModals(); }));
+    document.addEventListener("keydown", event => { if (event.key === "Escape") closeModals(); });
+    searchInput.addEventListener("input", render);
+    document.querySelectorAll("[data-status]").forEach(button => button.addEventListener("click", () => {
+      selectedStatus = button.dataset.status;
+      document.querySelectorAll("[data-status]").forEach(chip => chip.classList.toggle("current", chip === button));
+      document.getElementById("filter-label").textContent = selectedStatus;
+      render();
+    }));
+    document.getElementById("status-filter").addEventListener("click", () => {
+      const options = ["Available", "Reserved", "Sold", "All"];
+      selectedStatus = options[(options.indexOf(selectedStatus) + 1) % options.length];
+      document.querySelectorAll("[data-status]").forEach(chip => chip.classList.toggle("current", chip.dataset.status === selectedStatus));
+      document.getElementById("filter-label").textContent = selectedStatus;
+      render();
+    });
+    document.querySelectorAll("[data-category]").forEach(button => button.addEventListener("click", () => {
+      selectedCategory = button.dataset.category;
+      document.querySelectorAll("[data-category]").forEach(nav => nav.classList.toggle("active", nav === button));
+      document.querySelector(".inventory-title").textContent = selectedCategory === "All" ? "Parts & equipment" : selectedCategory;
+      render();
+    }));
+    document.getElementById("table-view").addEventListener("click", () => {
+      document.getElementById("table-wrap").style.display = "block";
+      gallery.style.display = "none";
+      document.getElementById("table-view").classList.add("selected");
+      document.getElementById("gallery-view").classList.remove("selected");
+    });
+    document.getElementById("gallery-view").addEventListener("click", () => {
+      document.getElementById("table-wrap").style.display = "none";
+      gallery.style.display = "grid";
+      document.getElementById("gallery-view").classList.add("selected");
+      document.getElementById("table-view").classList.remove("selected");
+    });
+    document.getElementById("add-form").addEventListener("submit", event => {
+      event.preventDefault();
+      const get = id => document.getElementById(id).value.trim();
+      const id = `AV-${String(1285 + items.length - 5).padStart(6, "0")}`;
+      const item = {
+        id, name: get("description"), manufacturer: get("manufacturer"), part: get("part-number"),
+        serial: get("serial-number"), category: get("category"), condition: get("condition"),
+        status: "Available", location: get("location"), price: get("price") ? `$${Number(get("price")).toLocaleString("en-US",{minimumFractionDigits:2})}` : "",
+        notes: get("notes")
+      };
+      items.unshift(item);
+      event.target.reset();
+      selectedStatus = "All";
+      document.querySelectorAll("[data-status]").forEach(chip => chip.classList.toggle("current", chip.dataset.status === "All"));
+      document.getElementById("filter-label").textContent = "All";
+      searchInput.value = "";
+      closeModals();
+      render();
+      toast(`Sample item ${id} added to this preview.`);
+    });
+    document.getElementById("edit-button").addEventListener("click", () => { closeModals(); toast("Editing will be available in the delivered system."); });
+    document.getElementById("export-button").addEventListener("click", () => toast("CSV / Excel export is shown in the proposed scope."));
+    document.getElementById("notifications").addEventListener("click", () => toast("You're all caught up."));
+    document.getElementById("help-link").addEventListener("click", event => { event.preventDefault(); toast("A short user guide is included in the proposed delivery."); });
+    document.querySelectorAll(".nav button[data-notice]").forEach(button => button.addEventListener("click", () => toast(button.dataset.notice)));
+    render();
+  </script>
+</body>
+</html>

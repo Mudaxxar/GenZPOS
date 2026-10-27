@@ -1,10 +1,16 @@
 @implements IDisposable
 @inject CurrentUser CurrentUser
 @inject AuthService Auth
+@inject StartupState Startup
 
 @* Nothing of the app is rendered until someone logs in; a new / reset password must be changed first.
    Each page states its right with [Authorize(Policy = Permissions.X)]; without it the page shows NoAccess. *@
-@if (CurrentUser.Session is not { } session)
+@* Database connection screen first: when the database couldn't be reached at startup, or opened from Settings. *@
+@if (Startup.ShowSetup)
+{
+    <DatabaseSetup />
+}
+else if (CurrentUser.Session is not { } session)
 {
     <LoginScreen />
 }
@@ -40,10 +46,18 @@ else
 }
 
 @code {
-    protected override void OnInitialized() => CurrentUser.Changed += OnUserChanged;
+    protected override void OnInitialized()
+    {
+        CurrentUser.Changed += OnUserChanged;
+        Startup.Changed += OnUserChanged;
+    }
 
     // Login / logout can be raised from any component; re-render the whole app.
     private void OnUserChanged() => _ = InvokeAsync(StateHasChanged);
 
-    public void Dispose() => CurrentUser.Changed -= OnUserChanged;
+    public void Dispose()
+    {
+        CurrentUser.Changed -= OnUserChanged;
+        Startup.Changed -= OnUserChanged;
+    }
 }

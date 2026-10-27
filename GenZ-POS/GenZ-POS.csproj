@@ -59,9 +59,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Per-shop settings (connection string, backup folder). Read from next to GenZ-POS.exe. -->
-    <!-- The Web/Razor SDK already includes *.json as Content; just make sure it's copied to build + publish output. -->
-    <Content Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Per-PC settings (connection string, backup folder, printers). Read from next to GenZ-POS.exe.
+         Copied to the DEVELOPER's build output only, NEVER to the published release (owner 2026-10-26): an update copied
+         over a shop's folder replaced the shop's appsettings.json with this PC's, so GenZ-POS opened another (new, empty)
+         database. On a new PC the app writes its own appsettings.json on first start (AppConfig.Load). -->
+    <Content Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
   </ItemGroup>
+
+  <!-- The release carries the developer's appsettings.json as appsettings.default.json (owner 2026-10-26): on a PC's FIRST
+       start AppConfig.Load copies it to appsettings.json (so the client gets this connection string); an update only
+       replaces the .default file, never the PC's own appsettings.json. Works for dotnet publish, publish.ps1 and VS. -->
+  <Target Name="ShipDefaultSettings" AfterTargets="Publish">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\appsettings.json" DestinationFiles="$(PublishDir)appsettings.default.json" />
+  </Target>
 
 </Project>

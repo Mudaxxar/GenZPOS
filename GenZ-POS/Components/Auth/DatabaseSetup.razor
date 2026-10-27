@@ -1,0 +1,212 @@
+@using Microsoft.Data.SqlClient
+@inject AppConfig Config
+@inject StartupState Startup
+
+@* Database connection screen (owner 2026-10-26), like the login screen: shown instead of the app when GenZ-POS can't
+   reach its database at startup (StartupState.SetupMode), or from Settings → Change database connection.
+   SQL Server (found on this PC, or typed: MAINPC\SQLEXPRESS) → Windows / SQL login → Connect → pick the database
+   (GenZ-POS ones show their data) or a new name → Save & restart (appsettings.json, ConnectionSetup). *@
+<div class="auth-screen">
+    <RadzenCard class="auth-card setup-card">
+        <RadzenStack Gap="1rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+                <RadzenImage Path="img/logo.png" AlternateText="" Style="width:44px; height:44px" />
+                <div>
+                    <RadzenText TextStyle="TextStyle.H5" TagName="TagName.H1" class="rz-m-0">Database connection</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0 auth-muted">Where this computer's GenZ-POS keeps its data</RadzenText>
+                </div>
+            </RadzenStack>
+
+            @if (Startup.SetupMode && Startup.Problem is { } problem)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">@problem</RadzenAlert>
+            }
+
+            <RadzenTemplateForm TItem="object" Data="@this" Submit="ConnectAsync">
+                <RadzenStack Gap="0.85rem">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                        <RadzenFormField Text="SQL Server" Style="flex:1">
+                            <RadzenAutoComplete @bind-Value="server" Data="@servers" OpenOnFocus="true" MinLength="0"
+                                                Placeholder="e.g.  .\SQLEXPRESS   or   MAINPC\SQLEXPRESS" />
+                        </RadzenFormField>
+                        <RadzenButton Icon="travel_explore" ButtonStyle="ButtonStyle.Light" IsBusy="@searching" tabindex="-1"
+                                      title="Look for SQL Server on this computer again" Click="FindServersAsync" />
+                    </RadzenStack>
+                    @if (!searching && servers.Count > 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0 auth-muted" Style="margin-top:-0.5rem">
+                            Found on this computer: @string.Join(", ", servers). For the main computer's data type its name.
+                        </RadzenText>
+                    }
+
+                    <RadzenRadioButtonList TValue="bool" @bind-Value="windowsLogin" Orientation="Orientation.Horizontal">
+                        <Items>
+                            <RadzenRadioButtonListItem Value="true" Text="Windows login" />
+                            <RadzenRadioButtonListItem Value="false" Text="SQL Server login" />
+                        </Items>
+                    </RadzenRadioButtonList>
+                    @if (!windowsLogin)
+                    {
+                        <RadzenRow Gap="0.75rem">
+                            <RadzenColumn Size="12" SizeSM="6">
+                                <RadzenFormField Text="Login" Style="width:100%"><RadzenTextBox @bind-Value="user" autocomplete="off" /></RadzenFormField>
+                            </RadzenColumn>
+                            <RadzenColumn Size="12" SizeSM="6">
+                                <RadzenFormField Text="Password" Style="width:100%"><RadzenPassword @bind-Value="password" /></RadzenFormField>
+                            </RadzenColumn>
+                        </RadzenRow>
+                    }
+
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Connect" Icon="link" IsBusy="@connecting" ButtonStyle="ButtonStyle.Secondary"
+                                  Disabled="@string.IsNullOrWhiteSpace(server)" Style="width:100%" />
+                </RadzenStack>
+            </RadzenTemplateForm>
+
+            @if (error is not null)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false" class="rz-m-0">@error</RadzenAlert>
+            }
+
+            @if (connected)
+            {
+                @* The databases on that server: GenZ-POS ones with their data first, then a new one. *@
+                <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-m-0">Database on @connectedServer</RadzenText>
+                <RadzenRadioButtonList TValue="string" @bind-Value="database" Orientation="Orientation.Vertical">
+                    <Items>
+                        @foreach (var db in shopDatabases)
+                        {
+                            <RadzenRadioButtonListItem Value="@db.Name"
+                                                       Text="@($"{db.Name} — {db.Products} product(s), {db.Sales} invoice(s)" + (db.LastSale is { } d ? $", last sale {d:dd-MMM-yyyy}" : "") + (db.HasData ? "" : " (empty)"))" />
+                        }
+                        <RadzenRadioButtonListItem Value="@NewDatabase" Text="A new database" />
+                    </Items>
+                </RadzenRadioButtonList>
+                @if (database == NewDatabase)
+                {
+                    <RadzenFormField Text="New database name" Style="width:100%">
+                        <RadzenTextBox @bind-Value="newName" MaxLength="100" />
+                    </RadzenFormField>
+                    @if (otherDatabases.Contains(newName?.Trim() ?? "", StringComparer.OrdinalIgnoreCase))
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="color:var(--rz-danger)">
+                            A database "@newName" already exists on this server (it isn't a GenZ-POS one). Choose another name.
+                        </RadzenText>
+                    }
+                    else
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0 auth-muted">
+                            GenZ-POS creates it, empty, when it starts (you'll be asked once more).
+                        </RadzenText>
+                    }
+                }
+
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+                    <RadzenButton Text="Save & restart GenZ-POS" Icon="restart_alt" Disabled="@(!CanSave)" Click="Save" />
+                </RadzenStack>
+            }
+
+            @if (!Startup.SetupMode)
+            {
+                <RadzenButton Text="Cancel: keep the current connection" Variant="Variant.Text" ButtonStyle="ButtonStyle.Light" Click="@Startup.CloseSetup" />
+            }
+            else
+            {
+                <RadzenButton Text="Try the saved connection again" Icon="refresh" Variant="Variant.Text" ButtonStyle="ButtonStyle.Light" Click="App.Restart" />
+            }
+            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0 auth-muted">
+                Now: @Config.ServerName / @Config.DatabaseName · saved in @AppConfig.FilePath
+            </RadzenText>
+        </RadzenStack>
+    </RadzenCard>
+    <div class="auth-version">GenZ-POS v@(AppConfig.Version)</div>
+</div>
+
+@code {
+    private const string NewDatabase = "\u0001new";
+
+    private List<string> servers = [];
+    private string? server, user, password, database, newName, error, connectedServer;
+    private bool windowsLogin = true, searching, connecting, connected;
+    private List<ShopDatabase> shopDatabases = [];
+    private List<string> otherDatabases = [];
+
+    private bool CanSave => connected && database is not null &&
+        (database != NewDatabase || (!string.IsNullOrWhiteSpace(newName) && !otherDatabases.Contains(newName.Trim(), StringComparer.OrdinalIgnoreCase)));
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Start from what is saved now.
+        try
+        {
+            var current = new SqlConnectionStringBuilder(Config.ConnectionString);
+            server = current.DataSource;
+            windowsLogin = current.IntegratedSecurity || string.IsNullOrEmpty(current.UserID);
+            user = current.UserID;
+            newName = string.IsNullOrWhiteSpace(current.InitialCatalog) ? "GenZPOS" : current.InitialCatalog;
+        }
+        catch
+        {
+            newName = "GenZPOS";
+        }
+        await FindServersAsync();
+    }
+
+    private async Task FindServersAsync()
+    {
+        searching = true;
+        try
+        {
+            servers = await ConnectionSetup.FindServersAsync(server);
+            if (string.IsNullOrWhiteSpace(server) && servers.Count > 0) server = servers[0];
+        }
+        finally
+        {
+            searching = false;
+        }
+    }
+
+    private async Task ConnectAsync()
+    {
+        if (string.IsNullOrWhiteSpace(server)) return;
+        connecting = true;
+        error = null;
+        connected = false;
+        try
+        {
+            (shopDatabases, otherDatabases) = await ConnectionSetup.ListDatabasesAsync(server, windowsLogin, user, password);
+            connectedServer = server.Trim();
+            connected = true;
+            // Preselect: the saved database if it is here, else the one with the latest sale, else a new one.
+            database = shopDatabases.FirstOrDefault(d => d.Name.Equals(Config.DatabaseName, StringComparison.OrdinalIgnoreCase) && d.HasData)?.Name
+                       ?? shopDatabases.Where(d => d.HasData).OrderByDescending(d => d.LastSale ?? DateTime.MinValue).FirstOrDefault()?.Name
+                       ?? shopDatabases.FirstOrDefault()?.Name
+                       ?? NewDatabase;
+        }
+        catch (Exception ex)
+        {
+            error = PageBase.FriendlyMessage(ex);
+        }
+        finally
+        {
+            connecting = false;
+        }
+    }
+
+    private void Save()
+    {
+        if (!CanSave || connectedServer is null) return;
+        var name = database == NewDatabase ? newName!.Trim() : database!;
+        try
+        {
+            Config.ConnectionString = ConnectionSetup.Build(connectedServer, name, windowsLogin, user, password);
+            Config.Save();
+            AppLog.Info($"Database connection changed on the connection screen: {connectedServer} / {name} ({(windowsLogin ? "Windows" : "SQL")} login)");
+        }
+        catch (Exception ex)
+        {
+            error = $"The connection could not be saved to {AppConfig.FilePath}: {ex.Message}";
+            return;
+        }
+        App.Restart();
+    }
+}

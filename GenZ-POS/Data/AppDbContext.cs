@@ -178,7 +178,8 @@ public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<AppDbConte
     public AppDbContext CreateDbContext(string[] args)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>();
-        AppDbContext.Configure(options, AppDbContext.DefaultConnectionString);
+        // Owner 2026-10-26: dotnet ef / Package Manager Console use the project's appsettings.json too (else the default).
+        AppDbContext.Configure(options, AppConfig.ConnectionStringForTools(System.IO.Directory.GetCurrentDirectory()));
         return new AppDbContext(options.Options);
     }
 }

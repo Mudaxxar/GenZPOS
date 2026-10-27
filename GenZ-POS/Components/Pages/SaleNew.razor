@@ -393,7 +393,8 @@
             <div class="panel-actions-row">
                 <RadzenButton Text="Save only" Icon="save" Variant="Variant.Outlined" IsBusy="Busy"
                               Click="@(() => SaveAsync(print: false))" Disabled="@(lines.Count == 0 || DiscountProblem is not null)" />
-                <RadzenButton Text="Clear" Icon="restart_alt" Variant="Variant.Text" ButtonStyle="ButtonStyle.Base" Click="ClearAsync" />
+                <RadzenButton Text="Clear  (Ctrl+R)" Icon="restart_alt" Variant="Variant.Text" ButtonStyle="ButtonStyle.Base" Click="ClearAsync" data-hotkey="Ctrl+R"
+                              title="Start a new sale (also refreshes the items and stock)" />
             </div>
         </div>
     </aside>
@@ -689,15 +690,22 @@
             await scanBox.FocusAsync();
             return;
         }
+        if (!item.IsQuantity)
+        {
+            // Owner 2026-10-26: a scanned piece goes straight into the cart at its sale price (no Add press); the cursor
+            // stays in the Barcode box for the next scan. Change the rate in the cart line if needed.
+            pickId = null;
+            itemText = null;
+            await AddLineAsync(item.Id, item.SalePrice);
+            Toast(NotificationSeverity.Success, $"Added {item.Barcode} · {item.Name} · {Money(item.SalePrice)}", 1500);
+            await scanBox.FocusAsync();
+            return;
+        }
+        // Quantity item (rice per kg): the strip fills and the cursor goes to Qty — how much is asked first, then Add.
         pickId = item.Id;
         ItemPicked();
         StateHasChanged();
-        // Quantity item: the cursor goes to Qty (how many kg); a piece: to Rate.
-        try
-        {
-            if (item.IsQuantity) await qtyBox.FocusAsync();
-            else await rateBox.FocusAsync();
-        }
+        try { await qtyBox.FocusAsync(); }
         catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or InvalidOperationException or NullReferenceException) { /* page closing */ }
     }
 
@@ -926,6 +934,15 @@
         notes = null;
         saleDate = DateTime.Today;
         customerId = Customer.WalkInId;
+        pickId = null;
+        itemText = null;
+        pickRate = 0;
+        pickQty = 1;
         await CustomerChangedAsync();
+        // Refresh (Ctrl+R, owner 2026-10-26): fresh items, stock, customers and held count — then back to the barcode box.
+        await LoadLookupsAsync();
+        await RefreshHeldCountAsync();
+        await linesGrid.Reload();
+        await scanBox.FocusAsync();
     }
 }

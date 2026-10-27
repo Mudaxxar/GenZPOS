@@ -22,7 +22,7 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit code $LASTEXITCODE
 # Post-checks: the things that silently break a Blazor Hybrid app when missing.
 $required = @(
     'GenZ-POS.exe',
-    'appsettings.json',
+    'appsettings.default.json',
     'WebView2Loader.dll',
     'wwwroot\index.html',
     'wwwroot\GenZ-POS.styles.css',
@@ -37,6 +37,14 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
+# A release must NOT contain appsettings.json: copied over a shop's folder it would replace that PC's settings and
+# point GenZ-POS at another (new, empty) database (owner 2026-10-26). The app writes its own on first start.
+$settings = Join-Path $Output 'appsettings.json'
+if (Test-Path -LiteralPath $settings) {
+    Remove-Item -LiteralPath $settings -Force
+    Write-Host 'Removed appsettings.json from the release (each PC keeps its own).' -ForegroundColor Yellow
+}
+
 # Ship the install / restore helpers with the app.
 foreach ($f in 'setup.cmd', 'restore.cmd', 'restore.sql', 'README-INSTALL.md') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $Output -Force
@@ -47,4 +55,4 @@ $sizeMb = [math]::Round(((Get-ChildItem -LiteralPath $Output -Recurse -File | Me
 Write-Host ''
 Write-Host "OK  GenZ-POS $version published to $Output ($sizeMb MB)" -ForegroundColor Green
 Write-Host 'Copy that whole folder to C:\GenZ-POS on the shop PC (see README-INSTALL.md).'
-Write-Host 'When UPDATING a shop PC, do not overwrite its appsettings.json.'
+Write-Host 'The release has appsettings.default.json (a copy of GenZ-POS\appsettings.json): a NEW PC starts from it; an updated PC keeps its own appsettings.json.'
