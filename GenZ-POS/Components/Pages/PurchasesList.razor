@@ -4,6 +4,7 @@
 @inject PurchaseService Purchases
 @inject ProductExcelService Excel
 @inject DesktopService Desktop
+@inject ShopInfo Shop
 
 <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
     <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Purchases</RadzenText>
@@ -12,7 +13,7 @@
         <RadzenButton Text="Pay supplier" Icon="payments" ButtonStyle="ButtonStyle.Secondary" Click="@(() => Nav.NavigateTo("supplier-payments"))" />
         <RadzenButton Text="Import stock from Excel" Icon="upload_file" ButtonStyle="ButtonStyle.Light" Click="ImportAsync"
                       title="Excel file (Products layout, one row per piece) → new items + one purchase bill from a supplier" />
-        <RadzenButton Text="New purchase" Icon="add_shopping_cart" Click="@(() => Nav.NavigateTo("purchases/new"))" />
+        <RadzenButton Text="New purchase" Icon="add_shopping_cart" Click="@(() => Nav.NavigateTo(Shop.NewPurchasePath))" />
     </RadzenStack>
 </RadzenStack>
 
@@ -43,7 +44,7 @@
     <RadzenDataGrid @ref="grid" TItem="Purchase" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
                     AllowPaging="true" PageSize="20" ShowPagingSummary="true" Density="Density.Compact"
                     EmptyText="No purchases match these filters."
-                    RowDoubleClick="@(a => Nav.NavigateTo($"purchases/{a.Data!.Id}/edit"))">
+                    RowDoubleClick="@(a => Nav.NavigateTo(EditPath(a.Data!.Id)))">
         <Columns>
             <RadzenDataGridColumn Property="Id" Title="#" Width="70px" />
             <RadzenDataGridColumn Title="Date" Width="115px"><Template>@Date(context.PurchaseDate)</Template></RadzenDataGridColumn>
@@ -62,7 +63,7 @@
                     <RadzenButton Icon="visibility" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="View" Click="@(() => ShowAsync(context))" />
                     <RadzenButton Icon="table_view" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Export to Excel" Click="@(() => ExportAsync(context.Id))" />
                     <RadzenButton Icon="label" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Print barcode labels" Click="@(() => Nav.NavigateTo($"purchases/{context.Id}/labels"))" />
-                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Edit" Click="@(() => Nav.NavigateTo($"purchases/{context.Id}/edit"))" />
+                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Edit" Click="@(() => Nav.NavigateTo(EditPath(context.Id)))" />
                     <RadzenButton Visible="@Can(Permissions.PurchaseReturnsManage)" Icon="assignment_return" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" title="Return to supplier" Click="@(() => Nav.NavigateTo($"purchases/{context.Id}/return"))" />
                     <RadzenButton Visible="@Can(Permissions.PurchasesDelete)" Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" title="Delete" Click="@(() => DeleteAsync(context))" />
                 </Template>
@@ -72,6 +73,9 @@
 </RadzenCard>
 
 @code {
+    /// <summary>Retail shops edit on the scan screen (it sends bills with pieces on to the article screen).</summary>
+    private string EditPath(int id) => Shop.EditPurchasePath(id);
+
     private record StatusOption(PayStatusFilter Value, string Text);
 
     private static readonly StatusOption[] statusOptions =
@@ -203,7 +207,7 @@
                     <RadzenButton Visible="@Can(Permissions.PurchaseReturnsManage)" Text="Return to supplier" Icon="assignment_return" ButtonStyle="ButtonStyle.Light" Click="@(() => { Dialogs.Close(); Nav.NavigateTo($"purchases/{p.Id}/return"); })" />
                     <RadzenButton Text="Export to Excel" Icon="table_view" ButtonStyle="ButtonStyle.Light" Click="@(() => ExportAsync(p.Id))" />
                     <RadzenButton Text="Labels" Icon="label" ButtonStyle="ButtonStyle.Light" Click="@(() => { Dialogs.Close(); Nav.NavigateTo($"purchases/{p.Id}/labels"); })" />
-                    <RadzenButton Text="Edit" Icon="edit" Click="@(() => { Dialogs.Close(); Nav.NavigateTo($"purchases/{p.Id}/edit"); })" />
+                    <RadzenButton Text="Edit" Icon="edit" Click="@(() => { Dialogs.Close(); Nav.NavigateTo(EditPath(p.Id)); })" />
                 </RadzenStack>
             </RadzenStack>,
             new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = true });

@@ -19,6 +19,10 @@ public class AppSetting
     public const string LabelDesign = "Label.Design";
     /// <summary>How new products are stocked (StockMode): Piece (one barcode per piece) or Quantity.</summary>
     public const string DefaultStockMode = "Product.DefaultStockMode";
+    /// <summary>BusinessType: Fashion or Retail (owner 2026-10-28). Replaces DefaultStockMode (still read when this is missing).</summary>
+    public const string BusinessType = "Shop.BusinessType";
+    /// <summary>PurchaseScreen: Scan or Articles. Missing = by the business type.</summary>
+    public const string PurchaseScreen = "Purchase.Screen";
     public const string BackupFolder = "Backup.Folder";
     public const string LastBackupAt = "Backup.LastAt";
 

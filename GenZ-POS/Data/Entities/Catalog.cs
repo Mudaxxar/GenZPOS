@@ -106,6 +106,13 @@ public class Product
     /// <summary>"Zee Shoes · Shoes" (+ pack size).</summary>
     public string DisplayName =>
         string.Join(" · ", new[] { Company?.Name, Name, PackSize }.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    /// <summary>"Pepsi 1.5 Ltr": the unit is added only to a plain number, as in ReportService.QuantityNameSql.</summary>
+    public static string SizedName(string name, string? packSize, string unit)
+    {
+        if (string.IsNullOrWhiteSpace(packSize)) return name;
+        return packSize.All(c => char.IsDigit(c) || c == '.') ? $"{name} {packSize} {unit}" : $"{name} {packSize}";
+    }
 }
 
 /// <summary>

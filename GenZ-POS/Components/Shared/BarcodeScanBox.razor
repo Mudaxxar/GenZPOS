@@ -47,6 +47,9 @@
     /// <summary>Raised once per scan with the matching product.</summary>
     [Parameter] public EventCallback<ProductLookup> Found { get; set; }
 
+    /// <summary>A code nothing has (grocery purchase: quick-create the item). Not set = a warning is shown.</summary>
+    [Parameter] public EventCallback<string> NotFound { get; set; }
+
     private string? code;
 
     private async Task ScannedAsync()
@@ -71,6 +74,10 @@
                     },
                     new DialogOptions { Width = "auto", Style = "max-width:95vw" }) is ProductLookup picked)
                 await Found.InvokeAsync(picked);
+        }
+        else if (NotFound.HasDelegate)
+        {
+            await NotFound.InvokeAsync(scanned);
         }
         else
         {

@@ -1,13 +1,14 @@
 @page "/"
 @inherits PageBase
 @inject ReportService Reports
+@inject ShopInfo Shop
 
 <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" class="rz-mb-4">
     <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-m-0">@(ShowStats ? "Dashboard" : "Welcome")</RadzenText>
     <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
         <RadzenButton Visible="@Can(Permissions.SalesCreate)" Text="New Sale" Icon="point_of_sale" Click="@(() => Nav.NavigateTo("sales/new"))" />
         <RadzenButton Visible="@Can(Permissions.PaymentsReceive)" Text="Receive Payment" Icon="payments" ButtonStyle="ButtonStyle.Secondary" Click="@(() => Nav.NavigateTo("payments"))" />
-        <RadzenButton Visible="@Can(Permissions.PurchasesManage)" Text="New Purchase" Icon="add_shopping_cart" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases/new"))" />
+        <RadzenButton Visible="@Can(Permissions.PurchasesManage)" Text="New Purchase" Icon="add_shopping_cart" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo(Shop.NewPurchasePath))" />
     </RadzenStack>
 </RadzenStack>
 

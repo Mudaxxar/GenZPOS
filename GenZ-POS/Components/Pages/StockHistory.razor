@@ -162,8 +162,12 @@ else if (loading)
         loading = true;
         try
         {
+            // A range up to today also shows entries dated ahead: they already count in stock, so closing = in stock now.
+            if (t >= DateTime.Today && await Reports.GetLastMovementDateAsync(id) is { } last && last.Date > t)
+                t = last.Date;
             var result = await Reports.GetStockCardAsync(id, f, t);
             if (version != loadVersion) return;
+            to = t;
             card = result;
             (shownFrom, shownTo) = (f, t);
             printAll = false;

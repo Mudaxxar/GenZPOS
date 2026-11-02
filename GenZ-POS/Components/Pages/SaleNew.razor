@@ -3,6 +3,7 @@
 @inherits PageBase
 @inject SaleService Sales
 @inject ReportService Reports
+@inject ShopInfo Shop
 
 @* Till-style sale screen.
    Left: page header (date, scanner) → item entry strip → cart (fills the height).
@@ -75,7 +76,14 @@
                             @{ var item = (ProductLookup)p; }
                             <div class="pick-row">
                                 <span class="pick-name">
-                                    <strong>@item.Barcode</strong> · @string.Join(" · ", new[] { item.ArticleNo, item.Company, item.Name, item.Colour, item.Size }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                                    @if (item.IsQuantity)
+                                    {
+                                        @item.DisplayName
+                                    }
+                                    else
+                                    {
+                                        <strong>@item.Barcode</strong> @(" · " + string.Join(" · ", new[] { item.ArticleNo, item.Name, item.Colour, item.Size }.Where(s => !string.IsNullOrWhiteSpace(s))))
+                                    }
                                 </span>
                                 <span class="pick-meta">
                                     <span class="@(item.OnHand <= 0 ? "pick-stock out" : "pick-stock")">@Qty(item.OnHand) @item.Unit</span>
@@ -459,7 +467,7 @@
 
     /// <summary>
     /// Matches for what is typed, in stock only: an exact barcode / article no. first, then items whose barcode,
-    /// article no., name, company, colour or size contain every typed word. At most 50.
+    /// article no., name, colour or size contain every typed word. At most 50.
     /// </summary>
     private void SearchItems(LoadDataArgs args)
     {
@@ -468,7 +476,7 @@
         var exact = ProductLookup.MatchCode(InStock, text);
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var found = InStock.Where(p => words.All(w =>
-            new[] { p.Barcode, p.ArticleNo, p.Name, p.Company, p.Colour, p.Size }
+            new[] { p.Barcode, p.ArticleNo, p.DisplayName, p.Colour, p.Size }
                 .Any(s => s?.Contains(w, StringComparison.OrdinalIgnoreCase) == true)));
         itemMatches = exact.Concat(found).Distinct().Take(50).ToList();
     }
@@ -698,6 +706,24 @@
             itemText = null;
             await AddLineAsync(item.Id, item.SalePrice);
             Toast(NotificationSeverity.Success, $"Added {item.Barcode} · {item.Name} · {Money(item.SalePrice)}", 1500);
+            await scanBox.FocusAsync();
+            return;
+        }
+        if (Shop.IsRetail && item.OnHand - InCartQty(item.Id) >= 1)
+        {
+            // Retail & grocery (owner 2026-10-28): each scan = one more on its line at the sale price (scan 3 soaps = 3).
+            // Loose items (rice by kg) still go through the Item box (F2) → Qty.
+            if (lines.FirstOrDefault(l => l.StockItemId == item.Id && l.Rate == item.SalePrice) is { } same)
+            {
+                same.Qty = Math.Round(same.Qty + 1, 3);
+                ClampPaid();
+                await linesGrid.Reload();
+            }
+            else
+            {
+                await AddLineAsync(item.Id, item.SalePrice);
+            }
+            Toast(NotificationSeverity.Success, $"{item.Name} · {Qty(InCartQty(item.Id))} {item.Unit}", 1500);
             await scanBox.FocusAsync();
             return;
         }

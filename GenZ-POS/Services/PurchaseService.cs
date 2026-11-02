@@ -215,6 +215,16 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
         await tx.CommitAsync();
     }
 
+    /// <summary>
+    /// Qty × cost, unless the screen gives the amount bought in packs: 2 packs at Rs 950 is Rs 1,900 on the supplier's
+    /// bill, though 12 pieces × the rounded 158.33 is 1,899.96. Only a difference that rounding can explain is accepted.
+    /// </summary>
+    private static decimal LineAmount(PurchaseLine l)
+    {
+        var computed = Math.Round(l.Qty * l.Cost, 2);
+        return l.Amount > 0 && Math.Abs(l.Amount - computed) <= l.Qty * 0.005m + 0.01m ? Math.Round(l.Amount, 2) : computed;
+    }
+
     /// <summary>Validates the bill and computes line amounts and totals. Returns the lines to save.</summary>
     private static List<PurchaseLine> Prepare(Purchase purchase)
     {
@@ -230,7 +240,7 @@ public class PurchaseService(IDbContextFactory<AppDbContext> dbFactory, CurrentU
 
         lines = lines.Select(l => new PurchaseLine
         {
-            StockItemId = l.StockItemId, Qty = l.Qty, Cost = l.Cost, Amount = Math.Round(l.Qty * l.Cost, 2),
+            StockItemId = l.StockItemId, Qty = l.Qty, Cost = l.Cost, Amount = LineAmount(l),
             SalePrice = l.SalePrice is { } price ? Math.Round(price, 2) : null,
         }).ToList();
 

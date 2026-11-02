@@ -4,6 +4,7 @@
 @inject ProductExcelService Excel
 @inject DesktopService Desktop
 @inject StockItemService Variants
+@inject ShopInfo Shop
 
 <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
     <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Products</RadzenText>
@@ -20,7 +21,7 @@
 
 <RadzenCard>
     <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
-        <RadzenTextBox Placeholder="Search name, colour, brand, article no. or barcode…" @bind-Value="search" @bind-Value:after="ReloadAsync" Style="min-width:280px; flex:1" />
+        <RadzenTextBox Placeholder="Search name, colour, article no. or barcode…" @bind-Value="search" @bind-Value:after="ReloadAsync" Style="min-width:280px; flex:1" />
         <RadzenDropDown TValue="int?" @bind-Value="companyId" @bind-Value:after="ReloadAsync" Data="@companies" TextProperty="Name" ValueProperty="Id"
                         Placeholder="All companies" AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Style="width:200px" />
         <RadzenDropDown TValue="int?" @bind-Value="categoryId" @bind-Value:after="ReloadAsync" Data="@categories" TextProperty="Name" ValueProperty="Id"
@@ -35,13 +36,14 @@
                     AllowPaging="true" PageSize="20" ShowPagingSummary="true" Density="Density.Compact" EmptyText="No products found."
                     RowDoubleClick="@(a => OpenAsync(a.Data!.Id))">
         <Columns>
-            <RadzenDataGridColumn Property="Company" Title="Company" Width="140px" />
-            <RadzenDataGridColumn Title="Category" Width="190px"><Template>@context.Category › @context.SubCategory</Template></RadzenDataGridColumn>
-            <RadzenDataGridColumn Property="Name" Title="Product">
-                <Template>@context.Name@if (context.Articles.Length > 0) { <span style="opacity:0.6; font-size:0.85em"> · Art @context.Articles</span> }</Template>
+            <RadzenDataGridColumn Property="Name" Title="Product" Width="240px">
+                <Template>@context.Name@if (!Shop.IsRetail && context.Articles.Length > 0) { <span style="opacity:0.6; font-size:0.85em"> · Art @context.Articles</span> }</Template>
             </RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Category" Width="190px"><Template>@context.Category › @context.SubCategory</Template></RadzenDataGridColumn>
+            @* Retail & grocery (Business type): the item's barcode instead of articles / sizes & colours. *@
+            <RadzenDataGridColumn Title="Barcode" Width="150px" Visible="@Shop.IsRetail"><Template>@context.Barcodes</Template></RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Pack" Width="90px"><Template>@context.PackSize</Template></RadzenDataGridColumn>
-            <RadzenDataGridColumn Title="Sizes & colours" Width="170px">
+            <RadzenDataGridColumn Title="Sizes & colours" Width="170px" Visible="@(!Shop.IsRetail)">
                 <Template><span title="@context.VariantsText">@context.VariantsSummary</span></Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn Title="Cost" Width="125px" TextAlign="TextAlign.Right"><Template>@Range(context.MinCost, context.MaxCost)</Template></RadzenDataGridColumn>
@@ -96,6 +98,8 @@
         public int FirstStockItemId { get; set; }
         /// <summary>"ART000001, ART000004": its stock items' article nos.</summary>
         public string Articles { get; set; } = "";
+        /// <summary>Retail list: its barcode ("+ n more" when it has several).</summary>
+        public string Barcodes { get; set; } = "";
         public int VariantCount { get; set; }
         public string VariantsSummary { get; set; } = "";
         public string VariantsText { get; set; } = "";
@@ -155,12 +159,12 @@
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim();
-            q = q.Where(p => p.Name.Contains(s) || p.Company!.Name.Contains(s) ||
+            q = q.Where(p => p.Name.Contains(s) ||
                              p.StockItems.Any(v => v.Barcode == s || v.ArticleNo.Contains(s) || (v.Colour != null && v.Colour.Contains(s))));
         }
 
         var total = await q.CountAsync();
-        var page = await q.OrderBy(p => p.Company!.Name).ThenBy(p => p.Name).ThenBy(p => p.PackSize).ThenBy(p => p.Id)
+        var page = await q.OrderBy(p => p.Name).ThenBy(p => p.PackSize).ThenBy(p => p.Id)
             .Skip(args.Skip ?? 0).Take(args.Top ?? 20)
             .Select(p => new ProductRow(p.Id, p.Company!.Name, p.SubCategory!.Category!.Name, p.SubCategory.Name, p.Name,
                 p.PackSize, p.Unit, p.MaxDiscountPercent, p.IsActive))
@@ -178,6 +182,7 @@
             var sizes = StockItemService.SortSizes(mine.Select(v => v.Size));
             r.FirstStockItemId = mine[0].Id;
             r.Articles = string.Join(", ", mine.Select(v => v.ArticleNo).Distinct(StringComparer.OrdinalIgnoreCase));
+            r.Barcodes = mine.Count == 1 ? mine[0].Barcode : $"{mine[0].Barcode} + {mine.Count - 1} more";
             r.VariantCount = mine.Count;
             r.VariantsSummary = mine.Count == 1
                 ? mine[0].VariantName

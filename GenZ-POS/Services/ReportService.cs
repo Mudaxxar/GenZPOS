@@ -439,6 +439,14 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
         return rows.ToList();
     }
 
+    /// <summary>Date of an item's latest stock movement; can be after today when a bill is dated ahead.</summary>
+    public async Task<DateTime?> GetLastMovementDateAsync(int stockItemId)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        return await db.Database.GetDbConnection().QuerySingleAsync<DateTime?>(
+            "SELECT MAX(MovementDate) FROM StockMovements WHERE StockItemId = @StockItemId", new { StockItemId = stockItemId });
+    }
+
     /// <summary>Stock card for one variant (colour + size): opening qty before From, movements in range with running balance.</summary>
     public async Task<StockCard> GetStockCardAsync(int variantId, DateTime from, DateTime to)
     {
@@ -503,7 +511,7 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
               JOIN Categories c ON c.Id = sc.CategoryId
               LEFT JOIN ({StockSql}) s ON s.StockItemId = v.Id
               WHERE p.IsActive = 1 AND v.IsActive = 1
-                AND (@Search IS NULL OR p.Name LIKE @Search OR v.Colour LIKE @Search OR co.Name LIKE @Search
+                AND (@Search IS NULL OR p.Name LIKE @Search OR v.Colour LIKE @Search
                      OR v.Barcode = @Raw OR v.ArticleNo LIKE @Search)
                 AND (@CompanyId IS NULL OR p.CompanyId = @CompanyId)
                 AND (@CategoryId IS NULL OR sc.CategoryId = @CategoryId)
@@ -558,8 +566,9 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
         var rows = await db.Database.GetDbConnection().QueryAsync<ProductLookup>($"""
             SELECT v.Id, p.Id AS ProductId,
                    -- article no. and barcode at the end so the item pickers can be searched by them
-                   CONCAT({VariantNameSql}, ' · ', v.ArticleNo, ' · ', v.Barcode) AS DisplayName,
-                   co.Name AS Company, p.Name, v.Colour, v.Size,
+                   CASE WHEN p.StockMode = {(int)StockMode.Quantity} THEN CONCAT({QuantityNameSql}, ' · ', v.Barcode)
+                        ELSE CONCAT({VariantNameSql}, ' · ', v.ArticleNo, ' · ', v.Barcode) END AS DisplayName,
+                   co.Name AS Company, p.Name, p.PackSize, v.Colour, v.Size,
                    v.Barcode, v.ArticleNo, p.Unit, v.PurchasePrice, v.SalePrice, p.MaxDiscountPercent, ISNULL(s.Qty, 0) AS OnHand,
                    p.StockMode, p.PurchaseUnit, p.PurchaseUnitQty
             FROM StockItems v
@@ -567,7 +576,7 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
             JOIN Companies co ON co.Id = p.CompanyId
             LEFT JOIN ({StockSql}) s ON s.StockItemId = v.Id
             WHERE p.IsActive = 1 AND v.IsActive = 1
-            ORDER BY co.Name, p.Name, v.ArticleNo, v.Colour, v.Size, v.Id
+            ORDER BY p.Name, v.ArticleNo, v.Colour, v.Size, v.Id
             """);
         return rows.ToList();
     }
@@ -579,29 +588,37 @@ public class ReportService(IDbContextFactory<AppDbContext> dbFactory)
     public async Task<List<ProductPick>> GetProductPicksAsync()
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        var rows = await db.Database.GetDbConnection().QueryAsync<ProductPick>("""
+        var rows = await db.Database.GetDbConnection().QueryAsync<ProductPick>($"""
             SELECT p.Id,
-                   CONCAT(co.Name, ' · ', p.Name, CASE WHEN p.PackSize IS NULL OR p.PackSize = '' THEN '' ELSE CONCAT(' · ', p.PackSize) END) AS DisplayName,
+                   CASE WHEN p.StockMode = {(int)StockMode.Quantity} THEN {QuantityNameSql}
+                        ELSE CONCAT(p.Name, CASE WHEN p.PackSize IS NULL OR p.PackSize = '' THEN '' ELSE CONCAT(' · ', p.PackSize) END) END AS DisplayName,
                    p.Unit, p.StockMode, p.PurchaseUnit, p.PurchaseUnitQty, ISNULL(st.Qty, 0) AS OnHand,
                    (SELECT TOP 1 i.Id FROM StockItems i WHERE i.ProductId = p.Id ORDER BY i.Id) AS FirstStockItemId,
                    ISNULL(last.PurchasePrice, 0) AS PurchasePrice, ISNULL(last.SalePrice, 0) AS SalePrice, ISNULL(last.ReorderLevel, 0) AS ReorderLevel
             FROM Products p
-            JOIN Companies co ON co.Id = p.CompanyId
             OUTER APPLY (SELECT TOP 1 i.PurchasePrice, i.SalePrice, i.ReorderLevel FROM StockItems i WHERE i.ProductId = p.Id ORDER BY i.Id DESC) last
             LEFT JOIN (SELECT i.ProductId, SUM(m.QtyIn - m.QtyOut) AS Qty
                        FROM StockMovements m JOIN StockItems i ON i.Id = m.StockItemId GROUP BY i.ProductId) st ON st.ProductId = p.Id
             WHERE p.IsActive = 1
-            ORDER BY co.Name, p.Name, p.PackSize, p.Id
+            ORDER BY p.Name, p.PackSize, p.Id
             """);
         return rows.ToList();
     }
 
-    /// <summary>"Zee Shoes · Shoes · Black · 42" in SQL (aliases v = StockItems, p = Products, co = Companies).</summary>
+    /// <summary>"Shoes · Black · 42" in SQL (aliases v = StockItems, p = Products). No company: pickers search this text.</summary>
     private const string VariantNameSql = """
-        CONCAT(co.Name, ' · ', p.Name,
+        CONCAT(p.Name,
                CASE WHEN p.PackSize IS NULL OR p.PackSize = '' THEN '' ELSE CONCAT(' · ', p.PackSize) END,
                CASE WHEN v.Colour IS NULL OR v.Colour = '' THEN '' ELSE CONCAT(' · ', v.Colour) END,
                CASE WHEN v.Size IS NULL OR v.Size = '' THEN '' ELSE CONCAT(' · ', v.Size) END)
+        """;
+
+    /// <summary>Quantity products: "Dalda Oil 5 Kg". The unit is added only to a plain number, so a pack typed "5 kg" isn't doubled.</summary>
+    private const string QuantityNameSql = """
+        CONCAT(p.Name,
+               CASE WHEN p.PackSize IS NULL OR p.PackSize = '' THEN ''
+                    WHEN p.PackSize NOT LIKE '%[^0-9.]%' THEN CONCAT(' ', p.PackSize, ' ', p.Unit)
+                    ELSE CONCAT(' ', p.PackSize) END)
         """;
 
     /// <summary>Contains-pattern for LIKE; the user's [ % _ are escaped so they match literally.</summary>
@@ -1009,6 +1026,7 @@ public class ProductLookup
     public string DisplayName { get; set; } = "";
     public string Company { get; set; } = "";
     public string Name { get; set; } = "";
+    public string? PackSize { get; set; }
     public string? Colour { get; set; }
     public string? Size { get; set; }
     public string? Barcode { get; set; }

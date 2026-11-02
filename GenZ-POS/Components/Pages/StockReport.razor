@@ -3,6 +3,7 @@
 @inherits PageBase
 @inject ReportService Reports
 @inject DesktopService Desktop
+@inject ShopInfo Shop
 
 <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
     <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">Stock Report</RadzenText>
@@ -15,7 +16,7 @@
 
 <RadzenCard>
     <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Center" class="rz-mb-2">
-        <RadzenTextBox Placeholder="Search barcode, article no., product, colour or brand…" @bind-Value="filter.Search" @bind-Value:after="ReloadAsync" Style="min-width:280px; flex:1" />
+        <RadzenTextBox Placeholder="Search barcode, article no., product or colour…" @bind-Value="filter.Search" @bind-Value:after="ReloadAsync" Style="min-width:280px; flex:1" />
         <RadzenDropDown TValue="int?" @bind-Value="filter.CompanyId" @bind-Value:after="ReloadAsync" Data="@companies" TextProperty="Name" ValueProperty="Id"
                         Placeholder="All companies" AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Style="width:200px" />
         <RadzenDropDown TValue="int?" @bind-Value="filter.CategoryId" @bind-Value:after="ReloadAsync" Data="@categories" TextProperty="Name" ValueProperty="Id"
@@ -24,15 +25,17 @@
                         Style="width:150px" title="Which pieces" />
     </RadzenStack>
     <RadzenStack Orientation="Orientation.Horizontal" Gap="1.5rem" Wrap="FlexWrap.Wrap" class="rz-mb-2">
-        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Articles: <strong>@count</strong></RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">@(Shop.IsRetail ? "Items" : "Articles"): <strong>@count</strong></RadzenText>
         <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">In stock (pieces + qty): <strong>@Qty(totalPieces)</strong></RadzenText>
         <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0">Stock value: <strong>@Money(totalValue)</strong></RadzenText>
     </RadzenStack>
 
     @* Grouped by article no. (owner): a header per article (product, pieces in stock, value), then its pieces. Paged by
-       article in SQL (ReportService.GetStockReportAsync), so an article is never split over two pages. *@
+       article in SQL (ReportService.GetStockReportAsync), so an article is never split over two pages.
+       Retail & grocery (Business type): a flat list, one row per item (barcode, item, qty in stock), no grouping. *@
     <RadzenDataGrid @ref="grid" TItem="StockReportRow" Data="@rows" Count="@count" LoadData="@LoadAsync" IsLoading="@loading"
-                    AllowPaging="true" PageSize="10" ShowPagingSummary="true" PagingSummaryFormat="Page {0} of {1} ({2} articles)"
+                    AllowPaging="true" PageSize="@(Shop.IsRetail ? 25 : 10)" ShowPagingSummary="true"
+                    PagingSummaryFormat="@(Shop.IsRetail ? "Page {0} of {1} ({2} items)" : "Page {0} of {1} ({2} articles)")"
                     AllowGrouping="true" HideGroupedColumn="true" Render="@OnRender" class="stock-grid"
                     Density="Density.Compact" EmptyText="No stock matches." RowRender="@RowRender"
                     RowDoubleClick="@(a => OpenProductAsync(a.Data!))">
@@ -61,16 +64,22 @@
             </span>
         </GroupHeaderTemplate>
         <Columns>
-            <RadzenDataGridColumn Property="ArticleNo" Title="Article no." />
+            <RadzenDataGridColumn Property="ArticleNo" Title="Article no." Visible="@(!Shop.IsRetail)" />
             <RadzenDataGridColumn Title="Barcode" Width="160px">
                 <Template><strong>@context.Barcode</strong>@if (context.OnHand <= 0 && !context.IsQuantity) { <span class="sold-tag">sold</span> }</Template>
             </RadzenDataGridColumn>
-            <RadzenDataGridColumn Property="Colour" Title="Colour" Width="140px" />
-            <RadzenDataGridColumn Title="Size" Width="90px"><Template><strong>@context.Size</strong></Template></RadzenDataGridColumn>
+            <RadzenDataGridColumn Title="Item" MinWidth="220px" Visible="@Shop.IsRetail">
+                <Template>
+                    @string.Join(" · ", new[] { context.Company, context.Name, context.PackSize }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                    <span class="article-meta"> · @context.Category › @context.SubCategory</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn Property="Colour" Title="Colour" Width="140px" Visible="@(!Shop.IsRetail)" />
+            <RadzenDataGridColumn Title="Size" Width="90px" Visible="@(!Shop.IsRetail)"><Template><strong>@context.Size</strong></Template></RadzenDataGridColumn>
             @* Quantity items (rice): kg on hand, red when at or below the low-stock level. Pieces: 1 each, not shown. *@
             <RadzenDataGridColumn Title="In stock" Width="120px" TextAlign="TextAlign.Right">
                 <Template>
-                    @if (context.IsQuantity)
+                    @if (context.IsQuantity || Shop.IsRetail)
                     {
                         <strong style="@(context.IsLow ? "color:var(--rz-danger)" : null)" title="@(context.ReorderLevel > 0 ? $"Low-stock alert at {Qty(context.ReorderLevel)}" : null)">@Fmt.QtyUnit(context.OnHand, context.Unit)</strong>
                     }
@@ -88,7 +97,8 @@
         </Columns>
     </RadzenDataGrid>
     <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
-        Grouped by article no. Piece items: one row per barcode; quantity items (rice per kg): one row with the qty in stock. Value = cost × qty in stock. Double-click a row to edit the product.
+        @(Shop.IsRetail ? "One row per item." : "Grouped by article no. Piece items: one row per barcode; quantity items (rice per kg): one row with the qty in stock.")
+        Value = cost × qty in stock. Double-click a row to edit the product.
     </RadzenText>
 </RadzenCard>
 
@@ -99,11 +109,11 @@
 
     private record StockOption(StockLevelFilter Value, string Text);
 
-    private static readonly StockOption[] stockOptions =
+    private StockOption[] stockOptions =>
     [
         new(StockLevelFilter.InStock, "In stock"),
-        new(StockLevelFilter.Out, "Sold"),
-        new(StockLevelFilter.All, "All pieces"),
+        new(StockLevelFilter.Out, Shop.IsRetail ? "Out of stock" : "Sold"),
+        new(StockLevelFilter.All, Shop.IsRetail ? "All items" : "All pieces"),
     ];
 
     private RadzenDataGrid<StockReportRow> grid = default!;
@@ -133,7 +143,7 @@
     /// <summary>Group by article no. from the start.</summary>
     private void OnRender(DataGridRenderEventArgs<StockReportRow> args)
     {
-        if (!args.FirstRender) return;
+        if (!args.FirstRender || Shop.IsRetail) return;
         grid.Groups.Add(new GroupDescriptor { Property = nameof(StockReportRow.ArticleNo), Title = "Article no." });
         StateHasChanged();
     }

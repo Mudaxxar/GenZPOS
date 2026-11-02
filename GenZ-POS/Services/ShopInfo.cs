@@ -53,18 +53,48 @@ public class ShopInfo(IDbContextFactory<AppDbContext> dbFactory)
             catch (FormatException ex) { AppLog.Warn("The saved shop logo is damaged; it is ignored.", ex); }
         }
         LogoDataUri = Logo is null ? null : "data:image/png;base64," + Convert.ToBase64String(Logo);
-        DefaultStockMode = Enum.TryParse<StockMode>(map.GetValueOrDefault(AppSetting.DefaultStockMode), out var mode) ? mode : StockMode.Piece;
+        // Business type (owner 2026-10-28); before it existed, "new products are stocked by Quantity" meant the same as Retail.
+        BusinessType = Enum.TryParse<BusinessType>(map.GetValueOrDefault(AppSetting.BusinessType), out var type) ? type
+            : map.GetValueOrDefault(AppSetting.DefaultStockMode) == nameof(StockMode.Quantity) ? BusinessType.Retail : BusinessType.Fashion;
+        PurchaseScreen = Enum.TryParse<PurchaseScreen>(map.GetValueOrDefault(AppSetting.PurchaseScreen), out var screen) ? screen
+            : IsRetail ? PurchaseScreen.Scan : PurchaseScreen.Articles;
         LabelDesign = LabelDesign.FromJson(map.GetValueOrDefault(AppSetting.LabelDesign)) ?? LabelDesign.SmallLabel(); // owner 2026-10-24: the BarTender 50 × 35 label
         Changed?.Invoke();
     }
 
-    /// <summary>How new products are stocked (Settings → Products): Piece (shoes) or Quantity (rice per kg).</summary>
-    public StockMode DefaultStockMode { get; private set; } = StockMode.Piece;
+    /// <summary>
+    /// How GenZ-POS runs (Settings → Business type, owner 2026-10-28): Fashion (articles, sizes / colours, one barcode per
+    /// piece) or Retail &amp; grocery (one barcode per item, bought and sold many times; barcode-first product form,
+    /// scan-to-buy purchase, scan +1 at the till). It picks the screens and how new products are stocked; each product
+    /// can still choose its own <see cref="StockMode"/> (mixed shops).
+    /// </summary>
+    public BusinessType BusinessType { get; private set; } = BusinessType.Fashion;
 
-    public async Task SaveDefaultStockModeAsync(StockMode mode)
+    public bool IsRetail => BusinessType == BusinessType.Retail;
+
+    /// <summary>How new products are stocked: by the business type.</summary>
+    public StockMode DefaultStockMode => IsRetail ? StockMode.Quantity : StockMode.Piece;
+
+    /// <summary>The screen New Purchase opens (Settings → Business type); until chosen, the one for the business type.</summary>
+    public PurchaseScreen PurchaseScreen { get; private set; } = PurchaseScreen.Articles;
+
+    public string NewPurchasePath => PurchaseScreen == PurchaseScreen.Scan ? "purchases/scan" : "purchases/new";
+
+    public string EditPurchasePath(int id) => PurchaseScreen == PurchaseScreen.Scan ? $"purchases/{id}/scan" : $"purchases/{id}/edit";
+
+    public async Task SaveBusinessTypeAsync(BusinessType type)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        await SetAsync(db, AppSetting.DefaultStockMode, mode.ToString());
+        await SetAsync(db, AppSetting.BusinessType, type.ToString());
+        await SetAsync(db, AppSetting.PurchaseScreen, null); // back to the new type's own screen
+        await db.SaveChangesAsync();
+        await LoadAsync();
+    }
+
+    public async Task SavePurchaseScreenAsync(PurchaseScreen screen)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        await SetAsync(db, AppSetting.PurchaseScreen, screen.ToString());
         await db.SaveChangesAsync();
         await LoadAsync();
     }
@@ -121,4 +151,22 @@ public enum PrintFormat
     Receipt80 = 0,
     Receipt58 = 1,
     A4 = 2,
+}
+
+/// <summary>The screen New Purchase opens. Stored by name — never rename.</summary>
+public enum PurchaseScreen
+{
+    /// <summary>/purchases/new: article cards, one barcode per piece.</summary>
+    Articles = 0,
+    /// <summary>/purchases/scan: scan each item, qty on its line.</summary>
+    Scan = 1,
+}
+
+/// <summary>How GenZ-POS runs (Settings → Business type). Stored by name — never rename.</summary>
+public enum BusinessType
+{
+    /// <summary>Shoes / clothes: articles with sizes &amp; colours, one barcode per piece.</summary>
+    Fashion = 0,
+    /// <summary>Retail &amp; grocery: one barcode per item (usually the maker's), bought and sold many times.</summary>
+    Retail = 1,
 }

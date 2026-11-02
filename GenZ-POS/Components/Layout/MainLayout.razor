@@ -47,7 +47,7 @@
             </RadzenPanelMenuItem>
             <RadzenPanelMenuItem Text="Purchases" Icon="local_shipping" Expanded="true"
                                  Visible="@CanAny(Permissions.PurchasesManage, Permissions.PurchaseReturnsManage, Permissions.SuppliersPay, Permissions.SuppliersManage)">
-                <RadzenPanelMenuItem Text="New Purchase" Icon="add_shopping_cart" Path="purchases/new" Visible="@Can(Permissions.PurchasesManage)" />
+                <RadzenPanelMenuItem Text="New Purchase" Icon="add_shopping_cart" Path="@Shop.NewPurchasePath" Visible="@Can(Permissions.PurchasesManage)" />
                 <RadzenPanelMenuItem Text="Purchase List" Icon="list_alt" Path="purchases" Match="NavLinkMatch.All" Visible="@Can(Permissions.PurchasesManage)" />
                 <RadzenPanelMenuItem Text="Purchase Returns" Icon="assignment_return" Path="purchase-returns" Visible="@Can(Permissions.PurchaseReturnsManage)" />
                 <RadzenPanelMenuItem Text="Pay Supplier" Icon="payments" Path="supplier-payments" Visible="@Can(Permissions.SuppliersPay)" />

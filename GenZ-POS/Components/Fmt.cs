@@ -79,9 +79,6 @@ public static class Fmt
                 ? new DateTime(y, m, d) : null;
     }
 
-    public static readonly string[] PackSizes =
-        ["Quarter", "Gallon", "Drum", "Dabba", "1 Ltr", "4 Ltr", "10 Ltr", "20 Ltr", "1 Kg", "5 Kg", "20 Kg"];
-
     public static readonly string[] Units = ["Pcs", "Pair", "Kg", "g", "Ltr", "ml", "Mtr", "Dozen", "Box", "Pack", "Bag", "Roll", "Set"];
 
     /// <summary>Units a quantity product is bought in (Products → "Bought in").</summary>

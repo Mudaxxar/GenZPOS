@@ -78,16 +78,26 @@
             </RadzenTemplateForm>
         </RadzenCard>
 
-        @* ---------- How new products are stocked (owner 2026-10-24) ---------- *@
+        @* ---------- Business type (owner 2026-10-28): how GenZ-POS runs ---------- *@
         <RadzenCard class="rz-mb-3">
-            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">New products are stocked by</RadzenText>
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">Business type</RadzenText>
             <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-2" Style="opacity:.7">
-                The default for new products; every product can still choose its own (Products → edit).
+                Sets the product, purchase and sale screens and how new products are stocked. Each product can still be
+                switched to the other way (Products → edit), e.g. a store that also sells shoes.
             </RadzenText>
-            <RadzenRadioButtonList TValue="StockMode" Value="@Shop.DefaultStockMode" ValueChanged="SaveStockModeAsync" Orientation="Orientation.Vertical">
+            <RadzenRadioButtonList TValue="BusinessType" Value="@Shop.BusinessType" ValueChanged="SaveBusinessTypeAsync" Orientation="Orientation.Vertical">
                 <Items>
-                    <RadzenRadioButtonListItem Value="StockMode.Piece" Text="Piece — every piece has its own barcode (shoes, clothes)" />
-                    <RadzenRadioButtonListItem Value="StockMode.Quantity" Text="Quantity — one barcode, bought and sold many times in any qty (rice per kg, sugar, oil)" />
+                    <RadzenRadioButtonListItem Value="BusinessType.Fashion"
+                                               Text="Fashion & footwear — articles with sizes & colours, every piece its own barcode (shoes, clothes)" />
+                    <RadzenRadioButtonListItem Value="BusinessType.Retail"
+                                               Text="Retail & grocery — one barcode per item, bought and sold many times (grocery, general store, rice per kg)" />
+                </Items>
+            </RadzenRadioButtonList>
+            <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-4 rz-mb-1">New Purchase opens</RadzenText>
+            <RadzenRadioButtonList TValue="PurchaseScreen" Value="@Shop.PurchaseScreen" ValueChanged="SavePurchaseScreenAsync" Orientation="Orientation.Vertical">
+                <Items>
+                    <RadzenRadioButtonListItem Value="PurchaseScreen.Scan" Text="Scan items — scan each item, qty on its line" />
+                    <RadzenRadioButtonListItem Value="PurchaseScreen.Articles" Text="Articles / pieces — article cards with sizes & colours" />
                 </Items>
             </RadzenRadioButtonList>
         </RadzenCard>
@@ -297,9 +307,18 @@
         savingLogo = false;
     }
 
-    private Task SaveStockModeAsync(StockMode mode) =>
-        RunAsync(() => Shop.SaveDefaultStockModeAsync(mode),
-            mode == StockMode.Quantity ? "New products: by quantity" : "New products: one barcode per piece");
+    private async Task SaveBusinessTypeAsync(BusinessType type)
+    {
+        if (type == Shop.BusinessType) return;
+        if (!await ConfirmAsync(type == BusinessType.Retail
+                ? "Run GenZ-POS as a Retail & grocery shop? Products, purchases and sales switch to one barcode per item. Existing products keep how they are stocked."
+                : "Run GenZ-POS as a Fashion & footwear shop? Products, purchases and sales switch to articles with sizes & colours. Existing products keep how they are stocked."))
+            return;
+        await RunAsync(() => Shop.SaveBusinessTypeAsync(type), $"Business type: {(type == BusinessType.Retail ? "Retail & grocery" : "Fashion & footwear")}");
+    }
+
+    private Task SavePurchaseScreenAsync(PurchaseScreen screen) =>
+        RunAsync(() => Shop.SavePurchaseScreenAsync(screen), "New Purchase screen saved");
 
     private async Task RemoveLogoAsync()
     {

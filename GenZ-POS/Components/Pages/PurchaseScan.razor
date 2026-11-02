@@ -1,0 +1,449 @@
+@page "/purchases/scan"
+@page "/purchases/{Id:int}/scan"
+@attribute [Authorize(Policy = Permissions.PurchasesManage)]
+@inherits PageBase
+@inject PurchaseService Purchases
+@inject ReportService Reports
+@inject ShopInfo Shop
+
+@* Retail & grocery purchase (owner 2026-10-28, Business type = Retail): scan the barcode on each item → a line with its
+   last cost; scanning it again = +1 on that line. A barcode GenZ-POS doesn't know opens the product form with it
+   (quick-create). Lines: qty, cost ↔ profit % ↔ retail all in the buying unit (Box / Carton when the product has one);
+   stock and the till use the piece: 1 Box of 6 at 950 / 1,250 = 6 Pcs at 158.33 / 208.33. Saved like any purchase
+   (PurchaseService); no label screen afterwards.
+   Items stocked by piece (shoes) are bought on the article screen (/purchases/new). *@
+
+<RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+    <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1">@(IsEdit ? $"Edit Purchase #{Id}" : "New Purchase (scan items)")</RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+        @if (loaded && !notFound)
+        {
+            <RadzenButton Text="@(IsEdit ? "Reload  (Ctrl+R)" : "Clear  (Ctrl+R)")" Icon="restart_alt" ButtonStyle="ButtonStyle.Light" Click="ClearAsync"
+                          data-hotkey="Ctrl+R" title="@(IsEdit ? "Throw away unsaved changes and load the saved bill again" : "Clear this purchase and start again (refreshes items)")" />
+        }
+        @if (!IsEdit)
+        {
+            <RadzenButton Text="Articles / pieces screen" Icon="checkroom" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases/new"))"
+                          title="Items with one barcode per piece (shoes, clothes) are bought there" />
+        }
+        <RadzenButton Text="Back to purchases" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo("purchases"))" />
+    </RadzenStack>
+</RadzenStack>
+
+@if (!loaded)
+{
+    <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Style="height:4px" />
+}
+else if (IsEdit && notFound)
+{
+    <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">Purchase #@Id was not found. It may have been deleted.</RadzenAlert>
+}
+else
+{
+<RadzenRow Gap="1rem">
+    <RadzenColumn Size="12" SizeLG="9">
+        <div data-enter-group="true">
+        <RadzenCard class="rz-mb-3">
+            <RadzenRow Gap="1rem">
+                <RadzenColumn Size="12" SizeMD="3">
+                    <DateBox Label="Date" @bind-Value="purchaseDate" Style="width:100%" />
+                </RadzenColumn>
+                <RadzenColumn Size="12" SizeMD="6">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenFormField Text="Supplier *" Style="flex:1">
+                            <RadzenDropDown TValue="int" OpenOnFocus="true" @bind-Value="supplierId" @bind-Value:after="SupplierChangedAsync"
+                                            Data="@suppliers" TextProperty="Name" ValueProperty="Id"
+                                            AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Placeholder="Select supplier" />
+                        </RadzenFormField>
+                        <RadzenButton Icon="add" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Outlined" title="Add new supplier" Click="AddSupplierAsync" />
+                    </RadzenStack>
+                </RadzenColumn>
+                <RadzenColumn Size="12" SizeMD="3">
+                    <RadzenFormField Text="Supplier bill #" Style="width:100%">
+                        <RadzenTextBox @bind-Value="billNo" MaxLength="50" />
+                    </RadzenFormField>
+                </RadzenColumn>
+            </RadzenRow>
+            @if (supplierId > 0)
+            {
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-mt-2 rz-mb-0">
+                    We owe this supplier @Money(supplierBalance) @(IsEdit ? "(including this bill as it was saved)" : "before this bill").
+                </RadzenText>
+            }
+        </RadzenCard>
+        </div>
+
+        @* Scan → line (or +1); Item (F2) for loose items without a barcode. Not inside a form: Enter would submit it. *@
+        <RadzenCard class="rz-mb-3">
+            <RadzenRow Gap="1rem" AlignItems="AlignItems.Center">
+                <RadzenColumn Size="12" SizeMD="5">
+                    <BarcodeScanBox @ref="scanBox" Label="Scan barcode" Products="@scannable" Found="ScannedAsync" NotFound="UnknownBarcodeAsync" AutoFocus="true" />
+                </RadzenColumn>
+                <RadzenColumn Size="12" SizeMD="7">
+                    <RadzenFormField Text="Item  (F2)" Style="width:100%">
+                        <RadzenDropDown TValue="int?" @bind-Value="pickedId" @bind-Value:after="ItemPickedAsync" Data="@scannable" TextProperty="DisplayName" ValueProperty="Id"
+                                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" FilterOperator="StringFilterOperator.Contains"
+                                        AllowClear="true" Placeholder="Type a name or barcode" data-hotkey="F2" />
+                    </RadzenFormField>
+                </RadzenColumn>
+            </RadzenRow>
+        </RadzenCard>
+
+        <RadzenDataGrid TItem="ScanLine" Data="@lines"Density="Density.Compact" AllowSorting="false" EmptyText="Scan the first item.">
+            <Columns>
+                <RadzenDataGridColumn Title="Item" MinWidth="180px">
+                    <Template>
+                        <span>@context.Name</span>
+                        @if (context.Min > 0)
+                        {
+                            <RadzenIcon Icon="lock" Style="font-size:15px;vertical-align:middle;opacity:0.7"
+                                        title="@($"{Qty(context.Min)} {context.Unit} of it is already sold or returned: the qty can't go below that")" />
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Qty" Width="120px" TextAlign="TextAlign.Right">
+                    <Template>
+                        <RadzenNumeric TValue="decimal" Value="@context.Qty" ValueChanged="@(v => context.Qty = v)" Min="0" ShowUpDown="false" Format="0.###" TextAlign="TextAlign.Right"
+                                       Style="width:100%" title="@context.BuyUnitText" />
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="display:block">@context.BuyUnitText</RadzenText>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Cost" Width="120px" TextAlign="TextAlign.Right">
+                    <Template>
+                        <RadzenNumeric TValue="decimal" Value="@context.Cost" ValueChanged="@(v => CostChanged(context, v))" Min="0" ShowUpDown="false" Format="N2" TextAlign="TextAlign.Right" Style="width:100%" />
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="display:block">per @context.BuyUnit</RadzenText>
+                        @if (context.PerBuyUnit != 1)
+                        {
+                            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="display:block">@Money(context.UnitCost) / @context.Unit</RadzenText>
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Profit %" Width="110px" TextAlign="TextAlign.Right">
+                    <Template>
+                        <RadzenNumeric TValue="decimal?" Value="@Pricing.ProfitPercent(context.Cost, context.Retail)" ShowUpDown="false" Format="0.##" TextAlign="TextAlign.Right" Style="width:100%"
+                                       ValueChanged="@((decimal? v) => { if (v is { } pct) context.Retail = Pricing.RetailFromProfit(context.Cost, pct); })" />
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Retail" Width="120px" TextAlign="TextAlign.Right">
+                    <Template>
+                        <RadzenNumeric TValue="decimal" Value="@context.Retail" ValueChanged="@(v => context.Retail = v)" Min="0" ShowUpDown="false" Format="N2" TextAlign="TextAlign.Right" Style="width:100%" />
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="display:block">per @context.BuyUnit</RadzenText>
+                        @if (context.PerBuyUnit != 1)
+                        {
+                            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0" Style="display:block">@Money(context.UnitRetail) / @context.Unit</RadzenText>
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn Title="Amount" Width="115px" TextAlign="TextAlign.Right"><Template>@Money(context.Amount)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn Width="56px" TextAlign="TextAlign.Center">
+                    <Template>
+                        <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Text" tabindex="-1"
+                                      Disabled="@(context.Min > 0)" title="Remove this line" Click="@(() => RemoveAsync(context))" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenColumn>
+
+    <RadzenColumn Size="12" SizeLG="3">
+        @* Enter flow: Discount → Paid → Notes → [Save] *@
+        <RadzenCard data-enter-group="true">
+            <RadzenStack Gap="0.75rem">
+                <TotalLine Label="Lines" Value="@lines.Count.ToString()" />
+                <TotalLine Label="Sub total" Value="@Money(SubTotal)" />
+                <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Start" Gap="0.5rem">
+                    <RadzenText TextStyle="TextStyle.Body1" class="rz-m-0 rz-pt-2">Discount</RadzenText>
+                    <DiscountInput @bind-Value="discountValue" @bind-IsPercent="discountIsPercent" SubTotal="@SubTotal" InputStyle="width:120px" />
+                </RadzenStack>
+                <TotalLine Label="Bill total" Value="@Money(Total)" Strong="true" />
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.End" Gap="0.5rem">
+                    <RadzenFormField Text="Paid on this bill" Style="flex:1">
+                        <RadzenNumeric TValue="decimal" @bind-Value="paid" Min="0" ShowUpDown="false" Format="N2" />
+                    </RadzenFormField>
+                    <RadzenButton Text="Full" ButtonStyle="ButtonStyle.Light" Click="@(() => paid = Total)" />
+                </RadzenStack>
+                <TotalLine Label="Unpaid (goes to supplier balance)" Value="@Money(Total - paid)" Danger="@(Total - paid > 0)" />
+                <RadzenFormField Text="Notes" Style="width:100%">
+                    <RadzenTextArea @bind-Value="notes" Rows="2" MaxLength="250" />
+                </RadzenFormField>
+                <RadzenButton Text="@(IsEdit ? "Save changes  (F9)" : "Save purchase  (F9)")" Icon="save" Size="ButtonSize.Large" IsBusy="Busy"
+                              Click="SaveAsync" Disabled="@(lines.Count == 0)" data-enter-submit="true" data-hotkey="F9" />
+            </RadzenStack>
+        </RadzenCard>
+    </RadzenColumn>
+</RadzenRow>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsEdit => Id is not null;
+
+    /// <summary>One bill line as typed: qty, cost and retail in the buying unit (Box).</summary>
+    private sealed class ScanLine
+    {
+        public int StockItemId { get; init; }
+        public string Name { get; init; } = "";
+        public string Unit { get; init; } = "";
+        /// <summary>Bag / Carton when the product is bought in one, else the stock unit.</summary>
+        public string BuyUnit { get; init; } = "";
+        /// <summary>Stock units in one buying unit (50 kg in a bag); 1 without one.</summary>
+        public decimal PerBuyUnit { get; init; } = 1;
+        public decimal Qty { get; set; }
+        public decimal Cost { get; set; }
+        public decimal Retail { get; set; }
+        /// <summary>Editing a bill: stock units already sold / returned (qty can't go below).</summary>
+        public decimal Min { get; init; }
+
+        public decimal UnitCost => Pricing.UnitPrice(Cost, PerBuyUnit);
+        public decimal UnitRetail => Pricing.UnitPrice(Retail, PerBuyUnit);
+        /// <summary>What the supplier's bill says: 2 boxes × 950 = 1,900 (saved as this amount, see PurchaseService.LineAmount).</summary>
+        public decimal Amount => Math.Round(Qty * Cost, 2);
+        public string BuyUnitText => PerBuyUnit == 1 ? Unit : $"{BuyUnit} = {Fmt.Qty(Qty * PerBuyUnit)} {Unit}";
+    }
+
+    private bool loaded, notFound;
+    private BarcodeScanBox? scanBox;
+    /// <summary>Items stocked by quantity (what this screen buys).</summary>
+    private List<ProductLookup> scannable = [];
+    private List<ProductLookup> allItems = [];
+    private List<Supplier> suppliers = [];
+    private List<ScanLine> lines = [];
+    private int? pickedId;
+
+    private DateTime purchaseDate = DateTime.Today;
+    private int supplierId;
+    private decimal supplierBalance;
+    private string? billNo, notes;
+    private decimal paid;
+    private decimal discountValue;
+    private bool discountIsPercent;
+    private decimal Discount => DiscountRules.Amount(SubTotal, discountValue, discountIsPercent);
+    private decimal SubTotal => lines.Sum(l => l.Amount);
+    private decimal Total => SubTotal - Discount;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loaded = false;
+        try
+        {
+            await LoadItemsAsync();
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (Id is int id)
+            {
+                var p = await Purchases.GetAsync(id);
+                if (p is null)
+                {
+                    notFound = true;
+                }
+                else if (p.Lines.Any(l => l.StockItem?.Product?.StockMode != StockMode.Quantity))
+                {
+                    // Pieces (one barcode each) are edited on the article screen.
+                    Nav.NavigateTo($"purchases/{id}/edit", replace: true);
+                    return;
+                }
+                else
+                {
+                    purchaseDate = p.PurchaseDate;
+                    supplierId = p.SupplierId;
+                    billNo = p.BillNo;
+                    discountValue = p.Discount;
+                    discountIsPercent = false;
+                    paid = p.Paid;
+                    notes = p.Notes;
+                    var minimums = await Purchases.GetMinimumQtyAsync(id);
+                    lines = p.Lines.Select(l =>
+                    {
+                        var product = l.StockItem!.Product!;
+                        var per = product.HasPurchaseUnit ? product.PurchaseUnitQty!.Value : 1;
+                        return new ScanLine
+                        {
+                            StockItemId = l.StockItemId, Name = ItemName(product),
+                            Unit = product.Unit, BuyUnit = product.HasPurchaseUnit ? product.PurchaseUnit! : product.Unit, PerBuyUnit = per,
+                            Qty = Math.Round(l.Qty / per, 3), Cost = per == 1 ? l.Cost : Math.Round(l.Amount / (l.Qty / per), 2),
+                            Retail = Pricing.PackPrice(l.SalePrice ?? l.StockItem.SalePrice, per), Min = minimums.GetValueOrDefault(l.StockItemId),
+                        };
+                    }).ToList();
+                }
+            }
+
+            // Keep the bill's supplier in the list even if it was made inactive.
+            suppliers = await db.Suppliers.AsNoTracking().Where(s => s.IsActive || s.Id == supplierId).OrderBy(s => s.Name).ToListAsync();
+            await SupplierChangedAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast(NotificationSeverity.Error, FriendlyMessage(ex), 6000);
+        }
+        loaded = true;
+    }
+
+    private async Task LoadItemsAsync()
+    {
+        allItems = await Reports.GetProductLookupAsync();
+        scannable = allItems.Where(i => i.IsQuantity).ToList();
+    }
+
+    private static string ItemName(Product p) =>
+        Product.SizedName(p.Name, p.PackSize, p.Unit);
+
+    private Task SupplierChangedAsync() => SupplierBalanceAsync();
+
+    private async Task SupplierBalanceAsync() =>
+        supplierBalance = supplierId > 0 ? await Reports.GetSupplierBalanceAsync(supplierId) : 0;
+
+    /// <summary>A scan: +1 on its line, or a new line with its latest cost and sale price.</summary>
+    private Task ScannedAsync(ProductLookup item)
+    {
+        AddOne(item);
+        return Task.CompletedTask;
+    }
+
+    private async Task ItemPickedAsync()
+    {
+        if (pickedId is int id && scannable.FirstOrDefault(i => i.Id == id) is { } item) AddOne(item);
+        pickedId = null;
+        if (scanBox is not null) await scanBox.FocusAsync();
+    }
+
+    private void AddOne(ProductLookup item)
+    {
+        if (lines.FirstOrDefault(l => l.StockItemId == item.Id) is { } line)
+        {
+            line.Qty += 1;
+            Toast(NotificationSeverity.Info, $"{item.Name}: {Qty(line.Qty)} {line.BuyUnit}", 1500);
+            return;
+        }
+        var hasUnit = !string.IsNullOrWhiteSpace(item.PurchaseUnit) && item.PurchaseUnitQty > 0;
+        var per = hasUnit ? item.PurchaseUnitQty!.Value : 1;
+        lines = [new ScanLine
+        {
+            StockItemId = item.Id, Name = Product.SizedName(item.Name, item.PackSize, item.Unit), Unit = item.Unit,
+            BuyUnit = hasUnit ? item.PurchaseUnit! : item.Unit, PerBuyUnit = per,
+            Qty = 1, Cost = Pricing.PackPrice(item.PurchasePrice, per), Retail = Pricing.PackPrice(item.SalePrice, per),
+        }, .. lines]; // newest on top; a new list so the grid redraws
+    }
+
+    /// <summary>A barcode GenZ-POS doesn't know (owner: quick-create): the product form with it, then its line.</summary>
+    private async Task UnknownBarcodeAsync(string code)
+    {
+        if (allItems.FirstOrDefault(i => string.Equals(i.Barcode, code, StringComparison.OrdinalIgnoreCase)) is { } piece)
+        {
+            Toast(NotificationSeverity.Warning, $"{piece.Name} is stocked by piece: buy it on the Articles / pieces screen.", 5000);
+            return;
+        }
+        if (!Can(Permissions.CatalogManage))
+        {
+            Toast(NotificationSeverity.Warning, $"No item has barcode {code}. Ask someone who may add products to add it.", 5000);
+            return;
+        }
+        if (!await ConfirmAsync($"No item has barcode {code}. Add it as a new product now?")) return;
+
+        var result = await Dialogs.OpenAsync<ProductDialog>("New product",
+            new Dictionary<string, object?> { [nameof(ProductDialog.Barcode)] = code },
+            new DialogOptions { Width = "760px" });
+        if (result is int stockItemId)
+        {
+            await RunAsync(LoadItemsAsync);
+            if (scannable.FirstOrDefault(i => i.Id == stockItemId) is { } item) AddOne(item);
+            else Toast(NotificationSeverity.Info, "Saved as a piece item: buy it on the Articles / pieces screen.", 5000);
+        }
+        if (scanBox is not null) await scanBox.FocusAsync();
+    }
+
+    private void CostChanged(ScanLine line, decimal cost)
+    {
+        // A new cost keeps the line's profit %, so its retail follows.
+        var pct = Pricing.ProfitPercent(line.Cost, line.Retail);
+        line.Cost = cost;
+        if (pct is { } p) line.Retail = Pricing.RetailFromProfit(line.Cost, p);
+    }
+
+    private Task RemoveAsync(ScanLine line)
+    {
+        if (line.Min > 0) return Task.CompletedTask;
+        lines = lines.Where(l => l != line).ToList();
+        return Task.CompletedTask;
+    }
+
+    private async Task AddSupplierAsync()
+    {
+        var name = await Dialogs.OpenAsync<NamePromptDialog>("Add supplier",
+            new Dictionary<string, object?> { [nameof(NamePromptDialog.Label)] = "Supplier name" }, new DialogOptions { Width = "420px" });
+        if (name is not string { Length: > 0 } n) return;
+        var supplier = new Supplier { Name = n };
+        await RunAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Suppliers.Add(supplier);
+            await db.SaveChangesAsync();
+            suppliers = await db.Suppliers.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync();
+            supplierId = supplier.Id;
+            supplierBalance = 0;
+        }, $"Supplier \"{n}\" added");
+    }
+
+    /// <summary>Clear / Reload (Ctrl+R): asks first when something was entered.</summary>
+    private async Task ClearAsync()
+    {
+        var entered = lines.Count > 0 || !string.IsNullOrWhiteSpace(billNo) || paid > 0;
+        if (entered && !await ConfirmAsync(IsEdit ? $"Throw away your changes and load purchase #{Id} again as it was saved?" : "Clear this purchase and start again?"))
+            return;
+        if (!IsEdit)
+        {
+            purchaseDate = DateTime.Today;
+            supplierId = 0;
+            billNo = notes = null;
+            paid = discountValue = 0;
+            discountIsPercent = false;
+        }
+        lines = [];
+        await OnParametersSetAsync();
+        Toast(NotificationSeverity.Info, IsEdit ? $"Purchase #{Id} loaded again" : "New purchase", 2500);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (lines.FirstOrDefault(l => l.Qty <= 0) is { } empty)
+        {
+            Toast(NotificationSeverity.Warning, $"{empty.Name}: enter a quantity, or remove the line.");
+            return;
+        }
+        if (lines.FirstOrDefault(l => l.Qty * l.PerBuyUnit < l.Min) is { } low)
+        {
+            Toast(NotificationSeverity.Warning, $"{low.Name}: {Qty(low.Min)} {low.Unit} of it is already sold or returned, the qty can't be less.", 5000);
+            return;
+        }
+        var purchase = new Purchase
+        {
+            Id = Id ?? 0,
+            PurchaseDate = purchaseDate.Date,
+            SupplierId = supplierId,
+            BillNo = string.IsNullOrWhiteSpace(billNo) ? null : billNo.Trim(),
+            Discount = Discount,
+            Paid = paid,
+            Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(),
+            // Stock is kept in the stock unit: boxes × 6, cost and retail per box ÷ 6.
+            Lines = lines.Select(l => new PurchaseLine
+            {
+                StockItemId = l.StockItemId, Qty = Math.Round(l.Qty * l.PerBuyUnit, 3), Cost = l.UnitCost, SalePrice = l.UnitRetail, Amount = l.Amount,
+            }).ToList(),
+        };
+
+        if (IsEdit)
+        {
+            if (await RunAsync(() => Purchases.UpdateAsync(purchase), $"Purchase #{Id} updated, stock adjusted"))
+                Nav.NavigateTo("purchases");
+            return;
+        }
+        if (await RunAsync(() => Purchases.CreateAsync(purchase), "Purchase saved, stock updated"))
+        {
+            purchaseDate = DateTime.Today;
+            supplierId = 0;
+            billNo = notes = null;
+            paid = discountValue = 0;
+            discountIsPercent = false;
+            lines = [];
+            await OnParametersSetAsync(); // the new prices / items for the next bill
+        }
+    }
+}
